@@ -1,0 +1,84 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- Basic project metadata -->
+    <groupId>com.mycompany.app</groupId>
+    <artifactId>my-app</artifactId>
+    <version>1.0-SNAPSHOT</version>
+
+    <properties>
+        <!-- Change Java version from 11 to 17 -->
+        <maven.compiler.source>17</maven.compiler.source> <!-- Set Java source level to 17 -->
+        <maven.compiler.target>17</maven.compiler.target> <!-- Set Java target level to 17 -->
+
+        <!-- Upgrade Spring Boot version -->
+        <spring-boot.version>3.2.0</spring-boot.version> <!-- Upgrade Spring Boot to 3.2.0 for compatibility with Java 17 -->
+
+        <!-- Plugin versions -->
+        <maven.compiler.plugin.version>3.8.1</maven.compiler.plugin.version>
+        <spring-boot.maven.plugin.version>3.2.0</spring-boot.maven.plugin.version>
+
+        <!-- Set encoding -->
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <!-- Define any additional properties required for migration -->
+        <jakarta.jakartaee-api.version>9.1.0</jakarta.jakartaee-api.version> <!-- Ensure Jakarta EE 9.1 API for Java 17 compatibility -->
+    </properties>
+
+    <dependencies>
+        <!-- Spring Boot Starter Parent -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-parent</artifactId>
+            <version>${spring-boot.version}</version>
+            <scope>import</scope>
+            <type>pom</type>
+        </dependency>
+
+        <!-- Spring Boot Starter Web to align with REST API patterns -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- Additional dependencies needed as part of the upgrade -->
+        <!-- Example: Update Hibernate and any other associated dependencies to be compatible with Java 17 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!-- Depend on new Jakrata namespaces as needed -->
+        <dependency>
+            <groupId>jakarta.persistence</groupId>
+            <artifactId>jakarta.persistence-api</artifactId>
+            <version>${jakarta.jakartaee-api.version}</version>
+        </dependency>
+
+        <!-- Additional dependencies go here, ensuring compatibility -->
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Maven Compiler Plugin for building Java projects -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>${maven.compiler.plugin.version}</version>
+                <configuration>
+                    <source>${maven.compiler.source}</source> <!-- Compile to Java Source version 17 -->
+                    <target>${maven.compiler.target}</target> <!-- Compile to Java Target version 17 -->
+                </configuration>
+            </plugin>
+            
+            <!-- Spring Boot Maven Plugin -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.maven.plugin.version}</version>
+            </plugin>
+        </plugins>
+    </build>
+</project>
