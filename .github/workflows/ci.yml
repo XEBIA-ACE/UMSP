@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout source code
+      uses: actions/checkout@v3
+
+  lint:
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: 17
+        distribution: 'temurin'
+
+    - name: Checkout source code
+      uses: actions/checkout@v3
+
+    - name: Run Lint
+      run: mvn checkstyle:check
+
+  test:
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: 17
+        distribution: 'temurin'
+
+    - name: Checkout source code
+      uses: actions/checkout@v3
+
+    - name: Set up Maven
+      run: mvn -B -V dependency:resolve
+
+    - name: Run Unit Tests
+      run: mvn test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: 17
+        distribution: 'temurin'
+
+    - name: Checkout source code
+      uses: actions/checkout@v3
+      
+    - name: Build with Maven
+      run: mvn clean package
+
+  sast:
+    needs: setup
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Set up JDK 17
+      uses: actions/setup-java@v3
+      with:
+        java-version: 17
+        distribution: 'temurin'
+
+    - name: Checkout source code
+      uses: actions/checkout@v3
+
+    - name: Run SAST Security Scan
+      run: echo "Placeholder for SAST scan tool execution"
