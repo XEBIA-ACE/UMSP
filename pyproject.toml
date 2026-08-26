@@ -1,0 +1,21 @@
+Unfortunately, without a "Base Source Code" containing the original `pyproject.toml`, I am unable to apply changes in place. Instead, I will generate a complete, working `pyproject.toml` focusing on the upgrade requirements. Here it is:
+
+```toml
+[tool.poetry]
+name = "your-project-name"
+version = "0.1.0"
+description = "A short description of the project."
+authors = ["Your Name <you@example.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.8"
+flask = "3.x"
+sqlalchemy = "2.x"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+```
+
+This configuration assumes a minimal viable setup following the provided upgrade context, ensuring Flask and SQLAlchemy are set to the specified target versions. Be sure to review and expand this with additional dependencies and configurations as needed for your particular project.
