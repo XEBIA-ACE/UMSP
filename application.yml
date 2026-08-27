@@ -4,55 +4,48 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.example</groupId>
-    <artifactId>example-project</artifactId>
+    <artifactId>example-app</artifactId>
     <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
 
     <properties>
-        <java.version>17</java.version> <!-- Upgraded Java version for compatibility with modernized dependencies -->
-        <spring.boot.version>2.7.16</spring.boot.version> <!-- Updated to match the target framework version -->
+        <!-- New Java version requirement -->
+        <java.version>17</java.version>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
     </properties>
 
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-dependencies</artifactId>
-                <version>${spring.boot.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
-
     <dependencies>
+        <!-- Upgraded Swagger version for API documentation -->
         <dependency>
             <groupId>io.springfox</groupId>
             <artifactId>springfox-swagger2</artifactId>
-            <version>2.10.5</version> <!-- Upgraded Swagger version to 2.10.5 -->
+            <version>2.10.5</version> <!-- Updated Swagger version -->
         </dependency>
         <dependency>
             <groupId>io.springfox</groupId>
             <artifactId>springfox-swagger-ui</artifactId>
-            <version>2.10.5</version> <!-- Upgraded Swagger UI version for consistency -->
+            <version>2.10.5</version> <!-- Updated Swagger UI version -->
         </dependency>
+
+        <!-- Spring Boot upgraded to 2.7.16 for compatibility -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+            <version>2.7.16</version>
+        </dependency>
+        
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.13.0</version> <!-- Upgrade Jackson databind to avoid known vulnerabilities -->
+            <version>2.13.3</version> <!-- Ensure Jackson is compatible with Spring Boot and Swagger versions -->
         </dependency>
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-        <!-- Additional dependencies -->
+
+        <!-- Other project dependencies -->
     </dependencies>
 
     <build>
         <plugins>
-            <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -62,24 +55,13 @@
                     <target>${java.version}</target>
                 </configuration>
             </plugin>
-            <!-- Other plugins -->
+
+            <!-- Including Spring Boot Maven plugin -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>2.7.16</version>
+            </plugin>
         </plugins>
     </build>
-
-    <profiles>
-        <profile>
-            <id>ci</id>
-            <activation>
-                <property>
-                    <name>env.CI</name>
-                </property>
-            </activation>
-            <build>
-                <plugins>
-                    <!-- CI-specific configurations for SAST -->
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
-
 </project>
