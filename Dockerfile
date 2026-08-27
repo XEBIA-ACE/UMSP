@@ -1,30 +1,31 @@
-# Use the official Maven image for building the application
-FROM maven:3.8.8-openjdk-11-slim AS build
+# Start a multi-stage build to minimize the final image size
+# Stage 1: Build stage
+FROM maven:3.8.6-openjdk-17-slim AS build
 
+# Set the working directory
 WORKDIR /app
 
-# Copy the Maven project files
+# Copy the pom.xml and download dependencies only
 COPY pom.xml .
 
-# Download necessary dependencies into the Maven cache
+# Download the dependencies in advance
 RUN mvn dependency:go-offline
 
-# Copy the entire project
-COPY . .
-
-# Build the application
+# Copy the project files and build the application
+COPY src ./src
 RUN mvn package -DskipTests
 
-# Use a minimal Java runtime for the application image
-FROM eclipse-temurin:11-jre-slim
+# Stage 2: Runtime stage
+FROM eclipse-temurin:11-jre-alpine
 
+# Set the working directory for the runtime
 WORKDIR /app
 
-# Copy the executable jar from the build stage
+# Copy the jar file from the build stage
 COPY --from=build /app/target/*.jar app.jar
 
-# Expose the application port
+# Port on which the app will run
 EXPOSE 8080
 
-# Run the application
-ENTRYPOINT ["java", "-jar", "app.jar"]
+# Command to run the application
+CMD ["java", "-jar", "app.jar"]
