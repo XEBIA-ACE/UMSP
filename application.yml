@@ -1,0 +1,47 @@
+# Swagger configuration file (swagger.properties)
+
+# Swagger API Documentation version - upgraded
+swagger.version=2.10.5
+# Updated to align Swagger version with modern compatibility and security standards
+
+# Original version commented out for reference
+# swagger.version=2.9.2
+
+# Base package to scan for Swagger documentation
+swagger.api.basePackage=com.example.api
+
+# Host information for the API documentation
+swagger.host=api.example.com
+
+# Paths to be included in the Swagger documentation
+swagger.api.paths=/api/**
+
+# Documentation title
+swagger.api.title=Example API Documentation
+
+# API description
+swagger.api.description=This is a sample documentation for Example API
+
+# Contact information
+swagger.api.contactName=Example Support
+swagger.api.contactEmail=support@example.com
+
+# License information
+swagger.api.license=Apache 2.0
+swagger.api.licenseUrl=http://www.apache.org/licenses/LICENSE-2.0.html
+
+# Additional metadata fields for Swagger UI
+swagger.api.version=1.0.0
+swagger.api.termsOfServiceUrl=http://example.com/terms/
+
+# Enable or disable Swagger JSON generation
+swagger.json.enabled=true
+
+# Enable or disable Swagger UI generation
+swagger.ui.enabled=true
+
+# Enable SAST - static application security testing
+swagger.sast.enabled=true
+# New key added for SAST configuration to align with secure CI/CD practices
+
+# Note: Ensure compatibility with Java 17 and updated libraries. Ensure thorough testing after applying these updates.
