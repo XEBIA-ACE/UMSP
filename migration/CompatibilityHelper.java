@@ -1,63 +1,64 @@
-// MigrationHelper.java
-package com.example.upgradedocs;
+import io.swagger.v3.oas.annotations.OpenAPIDefinition;
+import io.swagger.v3.oas.annotations.info.Info;
+import io.swagger.v3.oas.annotations.servers.Server;
+import springfox.documentation.builders.PathSelectors;
+import springfox.documentation.builders.RequestHandlerSelectors;
+import springfox.documentation.service.ApiInfo;
+import springfox.documentation.service.Contact;
+import springfox.documentation.spi.DocumentationType;
+import springfox.documentation.spring.web.plugins.Docket;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 
-import io.swagger.v2.aas.annotations.Operation; // New import for @Operation
-import io.swagger.v2.aas.annotations.media.Schema; // New import for @Schema
-import org.springframework.boot.autoconfigure.SpringBootApplication;
+// Rename package shims
+// Removed springfox.documentation.swagger2.annotations.EnableSwagger2
 
-@Deprecated
-public class SwaggerMigrationHelper {
+@Configuration
+@OpenAPIDefinition(
+        info = @Info(
+                title = "API Documentation",
+                version = "1.0.0",
+                description = "API documentation for our Spring Boot application",
+                contact = @Contact(
+                        name = "Developer Team",
+                        url = "https://example.com",
+                        email = "developer@example.com"
+                )
+        )
+)
+public class SwaggerConfig {
 
-    // Deprecated API replacements
-    /**
-     * This method replaces the deprecated ApiOperation annotation from Swagger 2.9.2.
-     * Depending on your use case, replace @Operation to your methods directly.
-     */
-    @Operation(summary = "TODO: Update the operation summary.")
-    public void apiOperationReplacement() {
-        // TODO: Replace deprecated ApiOperation usage with the new @Operation annotation
+    // Re-export using new API replacements
+    @Bean
+    public Docket api() {
+        return new Docket(DocumentationType.OAS_30)
+                .select()
+                .apis(RequestHandlerSelectors.any())
+                .paths(PathSelectors.any())
+                .build()
+                .apiInfo(apiInfo());
     }
 
-    /**
-     * This method replaces the deprecated ApiModelProperty annotations.
-     * Migrate those to `@Schema` for better OpenAPI 3.0 compliance.
-     */
-    @Schema(description = "TODO: Update schema details as needed.")
-    public void apiModelPropertyReplacement() {
-        // TODO: Replace deprecated ApiModelProperty usage with the new @Schema annotation
-    }
-
-    // Renamed packages or classes
-    /**
-     * Provides alias for updated Swagger packages.
-     * Replace old imports with these new packages.
-     * TODO: Update package and class imports throughout the project.
-     */
-    public void packageAliasHelper() {
-        // Update import statements as necessary
-    }
-
-    // Config format changes
-    /**
-     * Transforms old Swagger configuration format to the new required format.
-     * This function is an example scaffold - adjust according to your specific configurations.
-     */
-    public void migrateConfigFormat(Map<String, String> oldConfig) {
-        Map<String, String> newConfig = new HashMap<>();
-        
-        // Example transformation
-        if (oldConfig.containsKey("swagger.api.version")) {
-            newConfig.put("openapi.version", oldConfig.get("swagger.api.version"));
-        }
-
-        // TODO: Complete config migration logic as needed
-    }
-
-    public static void main(String[] args) {
-        SpringApplication.run(SwaggerMigrationHelper.class, args);
+    private ApiInfo apiInfo() {
+        return new ApiInfo(
+                "API Title",
+                "API Description",
+                "API Version",
+                "Terms of service URL",
+                new Contact("Name", "URL", "email@example.com"),
+                "License",
+                "License URL",
+                java.util.Collections.emptyList()
+        );
     }
 }
 
-```
+// Config format migration function (NOTE: This is a placeholder function)
+// TODO: Update configuration migration logic based on new configuration standards
+public class ConfigMigrationHelper {
 
-**Note:** This helper script provides scaffolding and guidelines for addressing the breaking changes and deprecated API replacements during the Swagger upgrade from version 2.9.2 to 2.10.5. Manual intervention and detailed project-specific changes will be required. Replace TODO comments with specific migration logic relevant to your project.
+    public static void migrateOldConfigToNew(/* oldConfig, newConfig */) {
+        // Example: Migrate environment variables or config file changes
+        // TODO: Implement the detailed logic for transforming old config to new format
+    }
+}
