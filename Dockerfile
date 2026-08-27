@@ -1,28 +1,30 @@
-# Use the latest OpenJDK 11 base image with Alpine for reduced size
-FROM eclipse-temurin:11-jre-alpine as builder
+# Use the official Maven image for building the application
+FROM maven:3.8.8-openjdk-11-slim AS build
 
-# Set the working directory
 WORKDIR /app
 
-# Copy the Maven build descriptor and source code
+# Copy the Maven project files
 COPY pom.xml .
-COPY src ./src
 
-# Use Maven to build the application
-RUN apk add --no-cache maven && \
-    mvn clean package -DskipTests
+# Download necessary dependencies into the Maven cache
+RUN mvn dependency:go-offline
 
-# Use a JVM base image for runtime
-FROM eclipse-temurin:11-jre-alpine
+# Copy the entire project
+COPY . .
 
-# Set the working directory in the container
+# Build the application
+RUN mvn package -DskipTests
+
+# Use a minimal Java runtime for the application image
+FROM eclipse-temurin:11-jre-slim
+
 WORKDIR /app
 
-# Copy the JAR file from the builder stage
-COPY --from=builder /app/target/*.jar app.jar
+# Copy the executable jar from the build stage
+COPY --from=build /app/target/*.jar app.jar
 
 # Expose the application port
 EXPOSE 8080
 
-# Command to run the application
-CMD ["java", "-jar", "app.jar"]
+# Run the application
+ENTRYPOINT ["java", "-jar", "app.jar"]
