@@ -1,47 +1,77 @@
-# Swagger configuration file (swagger.properties)
+<!-- pom.xml : Maven configuration file for Java project -->
 
-# Swagger API Documentation version - upgraded
-swagger.version=2.10.5
-# Updated to align Swagger version with modern compatibility and security standards
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
 
-# Original version commented out for reference
-# swagger.version=2.9.2
+    <groupId>com.example</groupId>
+    <artifactId>example-project</artifactId>
+    <version>1.0-SNAPSHOT</version>
 
-# Base package to scan for Swagger documentation
-swagger.api.basePackage=com.example.api
+    <properties>
+        <java.version>17</java.version> <!-- Updated Java version from 11 to 17 -->
+        <spring.boot.version>2.7.16</spring.boot.version> <!-- Updated Spring Boot version from 2.5.12 -->
+        <swagger.version>2.10.5</swagger.version> <!-- Updated Swagger version from 2.9.2 -->
+        <jackson.version>2.13.4</jackson.version> <!-- Ensure integration with Jackson library -->
+    </properties>
 
-# Host information for the API documentation
-swagger.host=api.example.com
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring.boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
-# Paths to be included in the Swagger documentation
-swagger.api.paths=/api/**
+    <dependencies>
+        <!-- Spring Boot Starter -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+        <!-- Swagger dependency updated -->
+        <dependency>
+            <groupId>io.springfox</groupId>
+            <artifactId>springfox-swagger2</artifactId>
+            <version>${swagger.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.springfox</groupId>
+            <artifactId>springfox-swagger-ui</artifactId>
+            <version>${swagger.version}</version>
+        </dependency>
+        <!-- Jackson Databind -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+        <!-- Removed or commented deprecated dependencies replaced by new version upgrades -->
+        <!-- Original comment -->
+    </dependencies>
 
-# Documentation title
-swagger.api.title=Example API Documentation
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <!-- Ensure compatibility with Java 17 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.1</version>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 
-# API description
-swagger.api.description=This is a sample documentation for Example API
-
-# Contact information
-swagger.api.contactName=Example Support
-swagger.api.contactEmail=support@example.com
-
-# License information
-swagger.api.license=Apache 2.0
-swagger.api.licenseUrl=http://www.apache.org/licenses/LICENSE-2.0.html
-
-# Additional metadata fields for Swagger UI
-swagger.api.version=1.0.0
-swagger.api.termsOfServiceUrl=http://example.com/terms/
-
-# Enable or disable Swagger JSON generation
-swagger.json.enabled=true
-
-# Enable or disable Swagger UI generation
-swagger.ui.enabled=true
-
-# Enable SAST - static application security testing
-swagger.sast.enabled=true
-# New key added for SAST configuration to align with secure CI/CD practices
-
-# Note: Ensure compatibility with Java 17 and updated libraries. Ensure thorough testing after applying these updates.
+</project>
