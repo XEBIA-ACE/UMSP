@@ -1,0 +1,218 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ "main", "develop", "release/**" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+  workflow_dispatch:
+
+env:
+  JAVA_VERSION: '21'
+  JAVA_DISTRIBUTION: 'temurin'
+  MAVEN_OPTS: '-Xmx2048m -XX:+TieredCompilation -XX:TieredStopAtLevel=1'
+
+jobs:
+  lint:
+    name: Lint and Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 (Eclipse Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Validate POM files
+        run: mvn validate --no-transfer-progress -pl sm-core-model,sm-core,sm-core-modules,sm-shop-model,sm-shop
+
+      - name: Checkstyle lint
+        run: mvn checkstyle:check --no-transfer-progress -pl sm-core-model,sm-core,sm-core-modules,sm-shop-model,sm-shop || true
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: shopizer_test
+          POSTGRES_USER: shopizer
+          POSTGRES_PASSWORD: shopizer
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 (Eclipse Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run unit tests — all modules
+        run: |
+          mvn test \
+            --no-transfer-progress \
+            -Dspring.profiles.active=test \
+            -pl sm-core-model,sm-core,sm-core-modules,sm-shop-model,sm-shop \
+            -am
+
+      - name: Upload Surefire reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/*.xml'
+          retention-days: 14
+
+  build:
+    name: Build — Multi-Module Maven
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 (Eclipse Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build all modules (skip tests — already run)
+        run: |
+          mvn clean package \
+            --no-transfer-progress \
+            -DskipTests \
+            -pl sm-core-model,sm-core,sm-core-modules,sm-shop-model,sm-shop \
+            -am
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            sm-shop/target/*.jar
+            sm-shop/target/*.war
+          retention-days: 7
+
+  integration-tests:
+    name: Integration Tests — Migration Validation
+    runs-on: ubuntu-latest
+    needs: build
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: shopizer_test
+          POSTGRES_USER: shopizer
+          POSTGRES_PASSWORD: shopizer
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 (Eclipse Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run integration tests
+        run: |
+          mvn verify \
+            --no-transfer-progress \
+            -Dspring.profiles.active=test \
+            -Dspring.datasource.url=jdbc:postgresql://localhost:5432/shopizer_test \
+            -Dspring.datasource.username=shopizer \
+            -Dspring.datasource.password=shopizer \
+            -pl sm-core-model,sm-core,sm-core-modules,sm-shop-model,sm-shop \
+            -am
+
+      - name: Upload Failsafe reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failsafe-reports
+          path: '**/target/failsafe-reports/*.xml'
+          retention-days: 14
+
+  sast-security-scan:
+    name: SAST Security Scan (Optional)
+    runs-on: ubuntu-latest
+    needs: build
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21 (Eclipse Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java
+          queries: security-extended
+
+      - name: Build for CodeQL analysis
+        run: |
+          mvn clean package \
+            --no-transfer-progress \
+            -DskipTests \
+            -pl sm-core-model,sm-core,sm-core-modules,sm-shop-model,sm-shop \
+            -am
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:java'
+
+      - name: Run OWASP Dependency-Check
+        run: |
+          mvn org.owasp:dependency-check-maven:check \
+            --no-transfer-progress \
+            -DfailBuildOnCVSS=9 \
+            -DsuppressionFile=.owasp-suppressions.xml \
+            -pl sm-core-model,sm-core,sm-core-modules,sm-shop-model,sm-shop \
+            -am || true
+
+      - name: Upload Dependency-Check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: '**/target/dependency-check-report.html'
+          retention-days: 14

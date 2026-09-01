@@ -1,0 +1,221 @@
+application.properties
+
+# ============================================================
+# Shopizer Application Configuration
+# Migrated: Spring Boot 2.5.12 → 3.4.1 | Java 11 → 21
+# Spring Security 5.5.x → 6.4.2
+# Spring Data JPA 2.5.x → 3.4.1 | Hibernate 5.4.x → 6.6.4
+# Drools 7.32.0.Final → 9.44.0.Final
+# Springfox Swagger 2.9.2 → SpringDoc OpenAPI 2.x
+# ============================================================
+
+# ============================================================
+# SERVER
+# ============================================================
+server.port=8080
+server.servlet.context-path=/
+
+# Spring Boot 3.x: error handling properties namespace unchanged
+server.error.include-message=always
+server.error.include-binding-errors=always
+
+# ============================================================
+# SPRING APPLICATION
+# ============================================================
+spring.application.name=shopizer
+
+# ============================================================
+# DATASOURCE
+# ============================================================
+spring.datasource.url=jdbc:postgresql://localhost:5432/shopizer
+spring.datasource.username=shopizer
+spring.datasource.password=shopizer
+# CHANGED: PostgreSQL driver upgraded from 42.2.18 to 42.7.x to remediate CVEs
+# The driver class is auto-detected by Spring Boot 3.x; explicit declaration kept for clarity
+spring.datasource.driver-class-name=org.postgresql.Driver
+
+# HikariCP connection pool (default in Spring Boot 3.x)
+spring.datasource.hikari.connection-timeout=30000
+spring.datasource.hikari.maximum-pool-size=10
+spring.datasource.hikari.minimum-idle=5
+spring.datasource.hikari.idle-timeout=600000
+spring.datasource.hikari.max-lifetime=1800000
+
+# ============================================================
+# JPA / HIBERNATE
+# ============================================================
+# CHANGED: Spring Data JPA 3.4.1 / Hibernate 6.6.4
+# Hibernate 6.x uses a new default implicit naming strategy; explicit config retained
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=false
+spring.jpa.open-in-view=false
+
+# CHANGED: Hibernate 6.x dialect package moved from org.hibernate.dialect to
+# org.hibernate.dialect (class names unchanged but internal implementation differs)
+spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect
+
+# CHANGED: Hibernate 6.x property namespace — hibernate.id.new_generator_mappings
+# is now the default (true) and no longer needs explicit declaration; kept for clarity
+spring.jpa.properties.hibernate.id.new_generator_mappings=true
+
+# CHANGED: Hibernate 6.x — jdbc.time_zone should be set explicitly for PostgreSQL
+spring.jpa.properties.hibernate.jdbc.time_zone=UTC
+
+# CHANGED: Hibernate 6.x — format_sql property namespace unchanged
+spring.jpa.properties.hibernate.format_sql=false
+
+# CHANGED: Hibernate 6.x — use_sql_comments property namespace unchanged
+spring.jpa.properties.hibernate.use_sql_comments=false
+
+# CHANGED: Hibernate 6.x — connection.provider_disables_autocommit improves
+# performance by avoiding unnecessary autocommit checks
+spring.jpa.properties.hibernate.connection.provider_disables_autocommit=true
+
+# CHANGED: Hibernate 6.x — jakarta.persistence namespace replaces javax.persistence
+# This is handled at the code level (javax→jakarta migration); no property change needed here
+
+# CHANGED: Hibernate 6.x — statistics disabled by default; explicit for clarity
+spring.jpa.properties.hibernate.generate_statistics=false
+
+# ============================================================
+# FLYWAY / LIQUIBASE (if used for schema migration)
+# ============================================================
+# Spring Boot 3.x: Flyway 9.x is the managed version; namespace unchanged
+# Uncomment and configure if schema migration tool is in use
+# spring.flyway.enabled=true
+# spring.flyway.locations=classpath:db/migration
+# spring.flyway.baseline-on-migrate=true
+
+# ============================================================
+# SPRING SECURITY
+# ============================================================
+# CHANGED: Spring Security 6.4.2 — SecurityFilterChain replaces WebSecurityConfigurerAdapter
+# (code-level change). The following properties reflect Security 6.x defaults.
+
+# CHANGED: Spring Security 6.x — lambda DSL is now the only supported configuration style
+# (code-level change; no property impact)
+
+# CHANGED: Spring Security 6.x — session management defaults changed;
+# explicit configuration recommended in SecurityFilterChain bean
+
+# CHANGED: Spring Security 6.x — CSRF protection defaults unchanged (enabled for web,
+# typically disabled for stateless REST APIs via SecurityFilterChain configuration)
+
+# ============================================================
+# JWT (jjwt replacement — CVE remediation)
+# ============================================================
+# CHANGED: jjwt 0.8.0 replaced with jjwt-api/jjwt-impl/jjwt-jackson 0.12.x
+# to remediate critical CVEs. Update secret and expiration as needed.
+shopizer.jwt.secret=REPLACE_WITH_STRONG_SECRET_KEY_MIN_256_BITS
+shopizer.jwt.expiration=86400
+
+# ============================================================
+# SPRINGDOC OPENAPI (replaces Springfox Swagger 2.9.2)
+# ============================================================
+# CHANGED: Springfox Swagger 2.9.2 removed — incompatible with Spring Boot 3.x
+# Replaced with SpringDoc OpenAPI 2.x (springdoc-openapi-starter-webmvc-ui)
+# NEW: springdoc.api-docs.path — path for OpenAPI JSON descriptor
+springdoc.api-docs.path=/v3/api-docs
+# NEW: springdoc.swagger-ui.path — path for Swagger UI (replaces /swagger-ui.html)
+springdoc.swagger-ui.path=/swagger-ui.html
+# NEW: springdoc.swagger-ui.enabled — enable/disable Swagger UI
+springdoc.swagger-ui.enabled=true
+# NEW: springdoc.api-docs.enabled — enable/disable OpenAPI descriptor endpoint
+springdoc.api-docs.enabled=true
+# NEW: springdoc.packages-to-scan — restrict scanning to API packages
+springdoc.packages-to-scan=com.salesmanager.shop.store.api
+# NEW: springdoc.show-actuator — include actuator endpoints in OpenAPI docs
+springdoc.show-actuator=false
+
+# ============================================================
+# ACTUATOR
+# ============================================================
+# Spring Boot 3.x: management endpoints namespace unchanged
+management.endpoints.web.exposure.include=health,info,metrics
+management.endpoint.health.show-details=when-authorized
+# CHANGED: Spring Boot 3.x — info endpoint contributors must be explicitly enabled
+management.info.env.enabled=true
+management.info.java.enabled=true
+management.info.os.enabled=true
+
+# ============================================================
+# LOGGING
+# ============================================================
+logging.level.root=INFO
+logging.level.com.salesmanager=INFO
+# CHANGED: Hibernate 6.x SQL logging uses org.hibernate.SQL logger
+logging.level.org.hibernate.SQL=WARN
+# CHANGED: Hibernate 6.x bind parameter logging uses org.hibernate.orm.jdbc.bind
+# (replaces org.hibernate.type.descriptor.sql in Hibernate 5.x)
+logging.level.org.hibernate.orm.jdbc.bind=WARN
+# DEPRECATED (Hibernate 5.x): logging.level.org.hibernate.type.descriptor.sql=TRACE
+logging.level.org.springframework.security=WARN
+logging.level.org.springframework.web=WARN
+
+# ============================================================
+# JACKSON (aligned to 2.18.x)
+# ============================================================
+# CHANGED: jackson-core/databind upgraded to 2.18.x (aligned with Spring Boot 3.4.1 BOM)
+spring.jackson.serialization.write-dates-as-timestamps=false
+spring.jackson.deserialization.fail-on-unknown-properties=false
+spring.jackson.default-property-inclusion=non_null
+# CHANGED: Spring Boot 3.x — java.time module auto-registered; explicit registration not needed
+spring.jackson.serialization.write-date-timestamps-as-nanoseconds=false
+
+# ============================================================
+# MULTIPART FILE UPLOAD
+# ============================================================
+# CHANGED: commons-fileupload 1.3.3 replaced to remediate critical CVEs
+# Spring Boot 3.x uses its own multipart resolver backed by jakarta.servlet
+spring.servlet.multipart.enabled=true
+spring.servlet.multipart.max-file-size=10MB
+spring.servlet.multipart.max-request-size=20MB
+# CHANGED: Spring Boot 3.x — multipart resolver is StandardServletMultipartResolver by default
+# commons-fileupload is no longer used as the backing implementation
+
+# ============================================================
+# DROOLS
+# ============================================================
+# CHANGED: Drools 7.32.0.Final → 9.44.0.Final
+# Drools 9.x (Kogito-aligned) uses a new API; KieServices/KieContainer patterns
+# are replaced by RuleUnitInstance API at the code level.
+# The following properties are application-specific and should be validated
+# against the new Drools 9.x configuration model.
+# NEW: drools.session.type — stateless is recommended for rule evaluation
+shopizer.drools.session.type=stateless
+# NEW: drools.rules.path — classpath location of DRL rule files
+shopizer.drools.rules.path=classpath:rules/
+
+# ============================================================
+# AWS S3 (if used)
+# ============================================================
+# Spring Boot 3.x: AWS SDK v2 is preferred; namespace may differ from SDK v1
+# Retain existing keys if AWS SDK v1 is still in use pending SDK migration
+shopizer.cms.aws.bucket=
+shopizer.cms.aws.region=us-east-1
+
+# ============================================================
+# GOOGLE CLOUD STORAGE (if used)
+# ============================================================
+shopizer.cms.gcp.bucket=
+
+# ============================================================
+# SHOPIZER APPLICATION-SPECIFIC
+# ============================================================
+shopizer.config.store=default
+shopizer.config.files.rootpath=/files/
+shopizer.config.files.static.path=/static/
+
+# ============================================================
+# SPRING BOOT 3.x MIGRATION NOTES (inline reference)
+# ============================================================
+# 1. javax.* → jakarta.* package migration required across all source files
+# 2. WebSecurityConfigurerAdapter removed — use SecurityFilterChain @Bean
+# 3. HttpSecurity lambda DSL required in Spring Security 6.x
+# 4. spring.mvc.pathmatch.use-suffix-pattern removed (was deprecated in 2.x)
+# 5. spring.mvc.pathmatch.use-registered-suffix-pattern removed
+# 6. Actuator /actuator/health groups: spring.boot.admin.* namespace if Spring Boot Admin used
+# 7. spring.data.jpa.repositories.bootstrap-mode default changed to DEFAULT in 3.x
+# 8. Hibernate 6.x: @GeneratedValue(strategy=AUTO) now uses SEQUENCE by default on PostgreSQL
+# 9. Springfox /v2/api-docs and /swagger-ui.html paths replaced by SpringDoc equivalents above
+# 10. commons-fileupload dependency must be removed from all module pom.xml files
