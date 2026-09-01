@@ -1,0 +1,189 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run Checkstyle lint
+        run: mvn --batch-mode checkstyle:check -Dcheckstyle.failOnViolation=true
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Run unit tests
+        run: mvn --batch-mode test -Dsurefire.failIfNoSpecifiedTests=false
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: '**/target/surefire-reports/*.xml'
+          retention-days: 14
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build all modules (skip tests)
+        run: mvn --batch-mode package -DskipTests
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: |
+            **/target/*.jar
+            **/target/*.war
+          retention-days: 14
+
+  smoke-tests:
+    name: Post-Migration Smoke Tests
+    runs-on: ubuntu-latest
+    needs: build
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: shopizer_test
+          POSTGRES_USER: shopizer
+          POSTGRES_PASSWORD: shopizer_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+
+      - name: Run integration / smoke tests
+        env:
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/shopizer_test
+          SPRING_DATASOURCE_USERNAME: shopizer
+          SPRING_DATASOURCE_PASSWORD: shopizer_pass
+          SPRING_JPA_HIBERNATE_DDL_AUTO: create
+          SPRING_PROFILES_ACTIVE: test
+        run: |
+          mvn --batch-mode verify \
+            -Dspring.datasource.url=${SPRING_DATASOURCE_URL} \
+            -Dspring.datasource.username=${SPRING_DATASOURCE_USERNAME} \
+            -Dspring.datasource.password=${SPRING_DATASOURCE_PASSWORD} \
+            -Dspring.jpa.hibernate.ddl-auto=${SPRING_JPA_HIBERNATE_DDL_AUTO} \
+            -Dspring.profiles.active=${SPRING_PROFILES_ACTIVE} \
+            -Pfailsafe \
+            -DskipUnitTests=true
+
+      - name: Upload smoke test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-reports
+          path: '**/target/failsafe-reports/*.xml'
+          retention-days: 14
+
+  sast:
+    name: SAST Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Cache SonarCloud packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: Run SonarCloud SAST scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          mvn --batch-mode sonar:sonar \
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }} \
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }} \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.login=${SONAR_TOKEN} \
+            -DskipTests=true
+
+      - name: Run OWASP Dependency-Check
+        run: |
+          mvn --batch-mode org.owasp:dependency-check-maven:check \
+            -Dformat=HTML \
+            -DfailBuildOnCVSS=7 \
+            -DsuppressionFile=.owasp-suppressions.xml || true
+
+      - name: Upload OWASP Dependency-Check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: owasp-dependency-check-report
+          path: '**/target/dependency-check-report.html'
+          retention-days: 14

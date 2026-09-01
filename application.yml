@@ -1,0 +1,209 @@
+# Integration Test Configuration for Shopizer Post-Migration Smoke Testing
+# Spring Boot 3.3.x / Spring Security 6.3.x / Hibernate 6.5.x / Jakarta EE namespace
+# Generated for: End-to-End Integration Validation and Smoke Testing Post-Migration
+
+# ─────────────────────────────────────────────────────────────────────────────
+# APPLICATION IDENTITY
+# ─────────────────────────────────────────────────────────────────────────────
+spring.application.name=shopizer-integration-test
+spring.profiles.active=integration-test
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SERVER
+# ─────────────────────────────────────────────────────────────────────────────
+server.port=8080
+# Spring Boot 3.x: context-path unchanged, but servlet namespace is now jakarta
+server.servlet.context-path=/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATASOURCE — PostgreSQL 42.7.x driver (CVE remediation from 42.2.18)
+# ─────────────────────────────────────────────────────────────────────────────
+spring.datasource.url=jdbc:postgresql://localhost:5432/shopizer_test
+spring.datasource.username=shopizer
+spring.datasource.password=shopizer
+# Updated driver class: postgresql 42.7.x retains same driver class name
+spring.datasource.driver-class-name=org.postgresql.Driver
+spring.datasource.hikari.pool-name=ShopTestPool
+spring.datasource.hikari.maximum-pool-size=10
+spring.datasource.hikari.minimum-idle=2
+spring.datasource.hikari.connection-timeout=30000
+spring.datasource.hikari.idle-timeout=600000
+spring.datasource.hikari.max-lifetime=1800000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JPA / HIBERNATE 6.5.x
+# Spring Data JPA 3.3.x (transitive via Spring Boot 3.3.x)
+# ─────────────────────────────────────────────────────────────────────────────
+spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect
+# Hibernate 6.x: dialect auto-detection improved; explicit class still valid
+spring.jpa.hibernate.ddl-auto=validate
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.format_sql=true
+spring.jpa.properties.hibernate.use_sql_comments=true
+# Hibernate 6.x: jdbc.batch_size key unchanged
+spring.jpa.properties.hibernate.jdbc.batch_size=20
+spring.jpa.properties.hibernate.order_inserts=true
+spring.jpa.properties.hibernate.order_updates=true
+# Hibernate 6.x: statistics useful for smoke-test query count assertions
+spring.jpa.properties.hibernate.generate_statistics=true
+# Hibernate 6.x: removed hbm2ddl.auto in favour of spring.jpa.hibernate.ddl-auto above
+# REMOVED (Hibernate 5.x only): spring.jpa.properties.hibernate.id.new_generator_mappings=true
+# Hibernate 6.x uses sequence-based id generation by default; key no longer needed
+# Hibernate 6.x: jakarta.persistence namespace replaces javax.persistence
+spring.jpa.properties.hibernate.jakarta.persistence.sharedCache.mode=UNSPECIFIED
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SPRING SECURITY 6.3.x
+# SecurityFilterChain replaces WebSecurityConfigurerAdapter (removed in 6.x)
+# ─────────────────────────────────────────────────────────────────────────────
+# Spring Security 6.x: lambda DSL is the only supported DSL; antMatchers removed
+# Smoke tests authenticate via Bearer JWT; configure resource-server below
+spring.security.oauth2.resourceserver.jwt.issuer-uri=http://localhost:8080
+# Spring Security 6.x: default user for actuator/smoke endpoints (override in prod)
+spring.security.user.name=smoke-test-user
+spring.security.user.password=smoke-test-password
+spring.security.user.roles=ADMIN,TEST
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JWT — replaced jjwt 0.8.0 with jjwt 0.12.x
+# jjwt 0.12.x API: Jwts.parser() replaces deprecated Jwts.parserBuilder()
+# ─────────────────────────────────────────────────────────────────────────────
+# Secret used by smoke-test JWT factory; must match application JWT config
+shopizer.security.jwt.secret=smoke-test-secret-key-replace-in-ci
+# jjwt 0.12.x: token expiry in milliseconds
+shopizer.security.jwt.expiration=3600000
+# jjwt 0.12.x: algorithm constant names changed (HS256 → Jwts.SIG.HS256)
+shopizer.security.jwt.algorithm=HS256
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SPRINGDOC OPENAPI 2.x  (replaces abandoned Springfox 2.9.2 / Swagger2)
+# springdoc-openapi 2.x is the only Swagger UI library compatible with
+# Spring Boot 3.x; Springfox 2.9.2 is incompatible with Spring MVC 6.x
+# ─────────────────────────────────────────────────────────────────────────────
+# Enable OpenAPI docs for smoke-test endpoint discovery
+springdoc.api-docs.enabled=true
+springdoc.api-docs.path=/v3/api-docs
+springdoc.swagger-ui.enabled=true
+springdoc.swagger-ui.path=/swagger-ui.html
+# Scan all three API version namespaces present in Shopizer (v0, v1, v2)
+springdoc.packages-to-scan=com.salesmanager.shop.store.api
+springdoc.paths-to-match=/api/v0/**,/api/v1/**,/api/v2/**
+# springdoc 2.x: group definitions for the 324 transactions across namespaces
+springdoc.group-configs[0].group=v0-legacy
+springdoc.group-configs[0].paths-to-match=/api/v0/**
+springdoc.group-configs[1].group=v1-primary
+springdoc.group-configs[1].paths-to-match=/api/v1/**
+springdoc.group-configs[2].group=v2-extended
+springdoc.group-configs[2].paths-to-match=/api/v2/**
+# REMOVED: springfox.documentation.swagger-ui.enabled (Springfox key — no longer valid)
+# REMOVED: springfox.documentation.auto-startup (Springfox key — no longer valid)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INFINISPAN 15.x  (upgraded from 9.4.18.Final)
+# Infinispan 15.x: spring-boot-starter-infinispan auto-configuration keys changed
+# ─────────────────────────────────────────────────────────────────────────────
+# Infinispan 15.x: embedded cache manager config file location (XML or YAML)
+infinispan.embedded.config-xml=infinispan-test.xml
+# Infinispan 15.x: statistics enabled for smoke-test cache hit/miss assertions
+infinispan.embedded.enabled=true
+# REMOVED (Infinispan 9.x only): infinispan.embedded.machineId
+# REMOVED (Infinispan 9.x only): infinispan.embedded.rackId
+# Infinispan 15.x: jgroups transport stack (tcp recommended for containerised CI)
+infinispan.embedded.cluster-name=shopizer-test-cluster
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DROOLS 9.x  (upgraded from 7.32.0.Final)
+# Drools 9.x: kogito-based API; kie-spring-boot-autoconfigure replaced by
+# drools-spring-boot-starter with updated property namespace
+# ─────────────────────────────────────────────────────────────────────────────
+# Drools 9.x: kieserver properties removed; use drools.* namespace
+drools.session-type=STATELESS
+# Drools 9.x: rule base scanning interval (ms); replaces kie.scanner.interval
+drools.resource.scanner.interval=60000
+# REMOVED (Drools 7.x only): org.kie.server.* properties
+# REMOVED (Drools 7.x only): kie.maven.settings.custom
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MULTIPART / FILE UPLOAD
+# commons-fileupload upgraded from 1.3.3 to 1.5+ (CVE-2023-24998 remediation)
+# commons-fileupload 1.5: DiskFileItemFactory.DEFAULT_SIZE_THRESHOLD changed
+# ─────────────────────────────────────────────────────────────────────────────
+# Spring Boot 3.x uses its own multipart resolver; commons-fileupload 1.5
+# is a transitive dependency; size limits enforced here
+spring.servlet.multipart.enabled=true
+spring.servlet.multipart.max-file-size=10MB
+spring.servlet.multipart.max-request-size=20MB
+# commons-fileupload 1.5: file-count-max introduced to mitigate CVE-2023-24998
+spring.servlet.multipart.file-size-threshold=2KB
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ACTUATOR — used by smoke-test health checks and CI readiness gates
+# ─────────────────────────────────────────────────────────────────────────────
+management.endpoints.web.exposure.include=health,info,metrics,env,beans,mappings
+management.endpoint.health.show-details=always
+# Spring Boot 3.x: health groups for liveness/readiness (Kubernetes / CircleCI)
+management.endpoint.health.group.liveness.include=livenessState
+management.endpoint.health.group.readiness.include=readinessState,db,diskSpace
+management.health.db.enabled=true
+management.health.diskspace.enabled=true
+# Spring Boot 3.x: info contributors must be explicitly enabled
+management.info.env.enabled=true
+management.info.java.enabled=true
+management.info.build.enabled=true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGGING — smoke-test verbosity
+# ─────────────────────────────────────────────────────────────────────────────
+logging.level.root=WARN
+logging.level.com.salesmanager=DEBUG
+logging.level.org.springframework.web=INFO
+logging.level.org.springframework.security=DEBUG
+logging.level.org.hibernate.SQL=DEBUG
+logging.level.org.hibernate.type.descriptor.sql=TRACE
+# Spring Boot 3.x / Hibernate 6.x: new statistics logger namespace
+logging.level.org.hibernate.stat=DEBUG
+logging.level.org.springdoc=INFO
+# Infinispan 15.x logger namespace changed from org.infinispan to io.quarkus.infinispan
+# for embedded (non-Quarkus) usage the org.infinispan namespace is still valid
+logging.level.org.infinispan=WARN
+logging.level.org.drools=WARN
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SMOKE TEST — endpoint inventory
+# All 324 Spring MVC transactions must return non-5xx on smoke pass
+# Namespaces: /api/v0/, /api/v1/, /api/v2/, /static/files/, /static/products/
+# ─────────────────────────────────────────────────────────────────────────────
+shopizer.smoke.base-url=http://localhost:${server.port}
+shopizer.smoke.api-namespaces=/api/v0,/api/v1,/api/v2
+shopizer.smoke.static-namespaces=/static/files,/static/products,/admin/files
+# Total expected transaction count from CAST Imaging analysis
+shopizer.smoke.expected-transaction-count=324
+# Fail smoke suite if any endpoint returns HTTP 5xx
+shopizer.smoke.fail-on-5xx=true
+# Timeout per endpoint probe (ms)
+shopizer.smoke.probe-timeout-ms=5000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SONARQUBE / SONARCLOUD — quality gate integration
+# Used by Jenkins and CircleCI post-migration pipeline steps
+# ─────────────────────────────────────────────────────────────────────────────
+sonar.projectKey=shopizer
+sonar.projectName=Shopizer
+sonar.projectVersion=3.3.x-migration
+sonar.sources=sm-shop/src/main/java,sm-core/src/main/java,sm-core-model/src/main/java
+sonar.tests=sm-shop/src/test/java,sm-core/src/test/java
+sonar.java.source=17
+sonar.java.target=17
+# Spring Boot 3.x requires Java 17+; source/target updated from 11
+sonar.java.binaries=**/target/classes
+sonar.coverage.jacoco.xmlReportPaths=**/target/site/jacoco/jacoco.xml
+# SonarQube: exclude generated OpenAPI sources from coverage
+sonar.exclusions=**/generated-sources/**,**/target/**
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JAKARTA EE NAMESPACE MIGRATION NOTICE
+# Spring Boot 3.x / Spring Framework 6.x require jakarta.* imports throughout.
+# All javax.servlet.*, javax.persistence.*, javax.validation.* references in
+# application source code must be replaced with their jakarta.* equivalents.
+# This property file uses no javax.* keys; all keys are Spring Boot 3.x native.
+# ─────────────────────────────────────────────────────────────────────────────
