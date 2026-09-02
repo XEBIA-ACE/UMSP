@@ -1,0 +1,609 @@
+# Complete Maven POM for Shopizer — Spring Boot 2.5.12 → 3.3.x Migration
+# Root/Parent pom.xml (multi-module Maven project)
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- =========================================================
+         Parent: Spring Boot 3.3.x BOM
+         CHANGED: was 2.5.12 — upgraded to 3.3.x (critical).
+         Spring Boot 3.x requires Java 17+ at compile/runtime.
+         All javax.* imports must be migrated to jakarta.* across
+         every module before this parent version takes effect.
+    ========================================================= -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <!-- CHANGED: 2.5.12 → 3.3.6 (latest 3.3.x patch as of spec) -->
+        <version>3.3.6</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.shopizer</groupId>
+    <artifactId>shopizer-parent</artifactId>
+    <version>3.2.5</version>
+    <packaging>pom</packaging>
+    <name>Shopizer Parent</name>
+    <description>Shopizer headless e-commerce platform — multi-module parent POM</description>
+
+    <!-- =========================================================
+         Multi-module declarations (unchanged structure)
+    ========================================================= -->
+    <modules>
+        <module>sm-core-model</module>
+        <module>sm-core</module>
+        <module>sm-shop-model</module>
+        <module>sm-shop</module>
+    </modules>
+
+    <!-- =========================================================
+         Global property definitions
+         CHANGED: java.version raised to 17 (Spring Boot 3.x minimum).
+         Runtime JVM 11 is noted in the upgrade context but Spring Boot
+         3.x mandates Java 17 bytecode; the JVM used to run the app
+         must also be 17+. Update your Dockerfile base image and
+         Jenkins/CircleCI agent accordingly.
+    ========================================================= -->
+    <properties>
+        <!-- CHANGED: 11 → 17 — Spring Boot 3.x hard requirement -->
+        <java.version>17</java.version>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <!-- ── Spring ecosystem ─────────────────────────────────
+             Spring Boot BOM manages Spring Framework 6.1.x,
+             Spring Security 6.3.x, and Spring Data 3.3.x
+             transitively. Explicit overrides are listed below
+             only where the BOM default must be pinned.
+        -->
+
+        <!-- CHANGED: Spring Security 5.5.x → 6.3.x
+             Managed by Spring Boot 3.3.x BOM — no explicit version
+             needed unless overriding. Declared here for visibility.
+             Key breaking changes:
+               - SecurityFilterChain bean replaces WebSecurityConfigurerAdapter
+               - HttpSecurity.authorizeRequests() → authorizeHttpRequests()
+               - antMatchers() → requestMatchers()
+               - UserDetailsService wiring changes
+        -->
+        <spring-security.version>6.3.4</spring-security.version>
+
+        <!-- CHANGED: Spring Data JPA 2.5.x → 3.3.x
+             Managed by Spring Boot 3.3.x BOM.
+             Key breaking change: jakarta.persistence.* replaces javax.persistence.*
+        -->
+        <!-- spring-data-bom version is managed by spring-boot-starter-parent -->
+
+        <!-- ── API documentation ────────────────────────────────
+             CHANGED: Springfox 2.9.2 REMOVED — abandoned, incompatible
+             with Spring Boot 3.x / Spring MVC 6.x.
+             ADDED: springdoc-openapi 2.x replaces Springfox entirely.
+             springdoc-openapi 2.x is compatible with Spring Boot 3.x
+             and Jakarta EE 10 namespaces.
+        -->
+        <!-- CHANGED: springfox.version property removed (deprecated library) -->
+        <!-- ADDED: springdoc-openapi 2.x -->
+        <springdoc-openapi.version>2.6.0</springdoc-openapi.version>
+
+        <!-- ── ORM / Persistence ────────────────────────────────
+             Hibernate 6.x is managed by Spring Boot 3.3.x BOM.
+             No explicit version override required unless pinning.
+        -->
+
+        <!-- ── Database driver ──────────────────────────────────
+             CHANGED: postgresql 42.2.18 → 42.7.x
+             CVE-2022-21724: SQL injection via connection string properties.
+             Spring Boot 3.3.x BOM manages 42.7.x; declared here for
+             explicit audit visibility.
+        -->
+        <postgresql.version>42.7.4</postgresql.version>
+
+        <!-- ── Security: JWT ────────────────────────────────────
+             CHANGED: jjwt 0.8.0 → 0.12.x
+             Algorithm confusion vulnerabilities in 0.8.x (no CVE ID
+             but well-documented security regression).
+             API surface changed significantly in 0.12.x:
+               - Jwts.parser() → Jwts.parserBuilder() removed in favour
+                 of Jwts.parser() with new fluent API
+               - Key handling via Keys utility class
+               - Separate runtime artifacts: jjwt-api, jjwt-impl, jjwt-jackson
+        -->
+        <jjwt.version>0.12.6</jjwt.version>
+
+        <!-- ── File upload ──────────────────────────────────────
+             CHANGED: commons-fileupload 1.3.3 → 1.5.0
+             CVE-2016-1000031: Remote Code Execution via deserialization.
+             Spring Boot 3.x uses its own multipart resolver by default;
+             commons-fileupload is only needed if CommonsMultipartResolver
+             is explicitly configured. Prefer Spring's StandardServletMultipartResolver.
+        -->
+        <commons-fileupload.version>1.5.0</commons-fileupload.version>
+
+        <!-- ── Rules engine ─────────────────────────────────────
+             CHANGED: Drools 7.32.0.Final → 9.x (medium urgency)
+             Drools 9.x is part of the KIE 9 / Kogito ecosystem.
+             Package renames: org.drools.* largely preserved but
+             kie-api groupId changed from org.kie to org.kie.
+             Verify kogito-bom or drools-bom BOM import below.
+        -->
+        <drools.version>9.44.0.Final</drools.version>
+
+        <!-- ── Distributed cache ────────────────────────────────
+             CHANGED: Infinispan 9.4.18.Final → 15.x (high urgency)
+             Infinispan 15.x requires Jakarta EE 10 namespaces,
+             aligning with Spring Boot 3.x. The Spring Cache integration
+             artifact changed: infinispan-spring-boot-starter-* is now
+             infinispan-spring-boot3-starter-*.
+        -->
+        <infinispan.version>15.0.10.Final</infinispan.version>
+
+        <!-- ── Object mapping ───────────────────────────────────
+             CHANGED: MapStruct 1.3.0.Final → 1.6.x (medium urgency)
+             MapStruct 1.6.x adds full support for Jakarta EE namespaces
+             and improved annotation processor compatibility with Java 17+.
+        -->
+        <mapstruct.version>1.6.3</mapstruct.version>
+
+        <!-- ── Build plugins ────────────────────────────────────
+             CHANGED: maven-compiler-plugin annotation processor order
+             matters for MapStruct + Lombok coexistence (see plugin section).
+        -->
+        <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
+        <maven-surefire-plugin.version>3.3.1</maven-surefire-plugin.version>
+        <maven-failsafe-plugin.version>3.3.1</maven-failsafe-plugin.version>
+
+        <!-- SonarCloud SAST integration properties -->
+        <sonar.organization>shopizer</sonar.organization>
+        <sonar.host.url>https://sonarcloud.io</sonar.host.url>
+        <!-- ADDED: Java 17 bytecode requires sonar.java.source alignment -->
+        <sonar.java.source>17</sonar.java.source>
+    </properties>
+
+    <!-- =========================================================
+         Dependency Management — BOM imports and version pinning
+    ========================================================= -->
+    <dependencyManagement>
+        <dependencies>
+
+            <!-- ── Drools / KIE BOM ─────────────────────────────
+                 CHANGED: drools-bom groupId/artifactId unchanged but
+                 version raised to 9.44.0.Final.
+                 Import before Spring Boot BOM so Drools wins on
+                 shared transitive dependencies (e.g., slf4j).
+            -->
+            <dependency>
+                <groupId>org.drools</groupId>
+                <artifactId>drools-bom</artifactId>
+                <version>${drools.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- ── Infinispan BOM ───────────────────────────────
+                 CHANGED: version 9.4.18.Final → 15.0.10.Final
+            -->
+            <dependency>
+                <groupId>org.infinispan</groupId>
+                <artifactId>infinispan-bom</artifactId>
+                <version>${infinispan.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- ── JJWT API ─────────────────────────────────────
+                 CHANGED: 0.8.0 → 0.12.6
+                 In 0.12.x the library is split into three artifacts.
+            -->
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-api</artifactId>
+                <!-- CHANGED: was single jjwt artifact at 0.8.0 -->
+                <version>${jjwt.version}</version>
+            </dependency>
+            <dependency>
+                <!-- ADDED: runtime implementation artifact (new in 0.12.x split) -->
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-impl</artifactId>
+                <version>${jjwt.version}</version>
+                <scope>runtime</scope>
+            </dependency>
+            <dependency>
+                <!-- ADDED: Jackson serialization artifact (new in 0.12.x split) -->
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-jackson</artifactId>
+                <version>${jjwt.version}</version>
+                <scope>runtime</scope>
+            </dependency>
+
+            <!-- ── PostgreSQL driver ────────────────────────────
+                 CHANGED: 42.2.18 → 42.7.4 (CVE-2022-21724 fix)
+                 Spring Boot BOM manages this; explicit pin for audit.
+            -->
+            <dependency>
+                <groupId>org.postgresql</groupId>
+                <artifactId>postgresql</artifactId>
+                <version>${postgresql.version}</version>
+            </dependency>
+
+            <!-- ── Commons FileUpload ───────────────────────────
+                 CHANGED: 1.3.3 → 1.5.0 (CVE-2016-1000031 RCE fix)
+                 Prefer Spring's built-in multipart support where possible.
+            -->
+            <dependency>
+                <groupId>commons-fileupload</groupId>
+                <artifactId>commons-fileupload</artifactId>
+                <version>${commons-fileupload.version}</version>
+            </dependency>
+
+            <!-- ── MapStruct ────────────────────────────────────
+                 CHANGED: 1.3.0.Final → 1.6.3
+            -->
+            <dependency>
+                <groupId>org.mapstruct</groupId>
+                <artifactId>mapstruct</artifactId>
+                <version>${mapstruct.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.mapstruct</groupId>
+                <artifactId>mapstruct-processor</artifactId>
+                <version>${mapstruct.version}</version>
+            </dependency>
+
+            <!-- ── springdoc-openapi 2.x ────────────────────────
+                 ADDED: replaces removed Springfox 2.9.2 dependency.
+                 springdoc-openapi-starter-webmvc-ui provides Swagger UI
+                 and OpenAPI 3 JSON/YAML endpoint at /v3/api-docs.
+            -->
+            <dependency>
+                <groupId>org.springdoc</groupId>
+                <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+                <!-- ADDED: Springfox replacement, Spring Boot 3.x compatible -->
+                <version>${springdoc-openapi.version}</version>
+            </dependency>
+
+        </dependencies>
+    </dependencyManagement>
+
+    <!-- =========================================================
+         Common dependencies inherited by all child modules
+    ========================================================= -->
+    <dependencies>
+
+        <!-- Spring Boot Test starter — managed by BOM -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+            <!-- CHANGED: Spring Boot 3.x removes JUnit 4 vintage engine
+                 by default. If JUnit 4 tests exist they must be migrated
+                 to JUnit 5 or the vintage engine re-added explicitly. -->
+        </dependency>
+
+        <!-- Spring Security Test — version managed by BOM (6.3.x) -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- MapStruct annotation — version managed by dependencyManagement -->
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+        </dependency>
+
+    </dependencies>
+
+    <!-- =========================================================
+         Build plugin management
+    ========================================================= -->
+    <build>
+        <pluginManagement>
+            <plugins>
+
+                <!-- ── Maven Compiler Plugin ────────────────────
+                     CHANGED: version raised to 3.13.0 for Java 17 support.
+                     Annotation processor order: Lombok must precede MapStruct
+                     when both are present to ensure Lombok-generated methods
+                     are visible to MapStruct at compile time.
+                -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>${maven-compiler-plugin.version}</version>
+                    <configuration>
+                        <!-- CHANGED: source/target raised to 17 -->
+                        <source>${java.version}</source>
+                        <target>${java.version}</target>
+                        <annotationProcessorPaths>
+                            <!-- CHANGED: MapStruct processor version 1.3.0.Final → 1.6.3 -->
+                            <path>
+                                <groupId>org.mapstruct</groupId>
+                                <artifactId>mapstruct-processor</artifactId>
+                                <version>${mapstruct.version}</version>
+                            </path>
+                            <!-- If Lombok is used, it must appear BEFORE mapstruct-processor -->
+                            <!-- Uncomment and add lombok entry here if Lombok is a dependency:
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                                <version>${lombok.version}</version>
+                            </path>
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok-mapstruct-binding</artifactId>
+                                <version>0.2.0</version>
+                            </path>
+                            -->
+                        </annotationProcessorPaths>
+                        <compilerArgs>
+                            <!-- ADDED: MapStruct 1.6.x default component model;
+                                 use 'spring' if mappers should be Spring beans -->
+                            <arg>-Amapstruct.defaultComponentModel=spring</arg>
+                            <!-- ADDED: suppress MapStruct unmapped target warnings
+                                 during migration; remove once all mappers are audited -->
+                            <arg>-Amapstruct.unmappedTargetPolicy=WARN</arg>
+                        </compilerArgs>
+                    </configuration>
+                </plugin>
+
+                <!-- ── Spring Boot Maven Plugin ─────────────────
+                     CHANGED: version managed by spring-boot-starter-parent 3.3.x.
+                     The repackage goal and layered JAR support are unchanged.
+                     Native image support (GraalVM) is available but not enabled here.
+                -->
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <configuration>
+                        <!-- ADDED: exclude Lombok from the fat JAR if present -->
+                        <excludes>
+                            <exclude>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                            </exclude>
+                        </excludes>
+                    </configuration>
+                </plugin>
+
+                <!-- ── Surefire (unit tests) ────────────────────
+                     CHANGED: version raised to 3.3.1 for JUnit 5 / Java 17 support.
+                     Spring Boot 3.x test slice annotations require JUnit Platform.
+                -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${maven-surefire-plugin.version}</version>
+                    <configuration>
+                        <!-- ADDED: required for Java 17 module system with Spring -->
+                        <argLine>
+                            --add-opens java.base/java.lang=ALL-UNNAMED
+                            --add-opens java.base/java.util=ALL-UNNAMED
+                            --add-opens java.base/java.lang.reflect=ALL-UNNAMED
+                        </argLine>
+                    </configuration>
+                </plugin>
+
+                <!-- ── Failsafe (integration tests) ─────────────
+                     CHANGED: version raised to 3.3.1.
+                     Used for smoke test and regression validation suite
+                     described in the spec (Section 1 / Section 2).
+                -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-failsafe-plugin</artifactId>
+                    <version>${maven-failsafe-plugin.version}</version>
+                    <configuration>
+                        <!-- ADDED: same JVM opens required for integration tests -->
+                        <argLine>
+                            --add-opens java.base/java.lang=ALL-UNNAMED
+                            --add-opens java.base/java.util=ALL-UNNAMED
+                            --add-opens java.base/java.lang.reflect=ALL-UNNAMED
+                        </argLine>
+                        <!-- Integration test class name patterns -->
+                        <includes>
+                            <include>**/*IT.java</include>
+                            <include>**/*IntegrationTest.java</include>
+                            <include>**/*SmokeTest.java</include>
+                        </includes>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>integration-test</goal>
+                                <goal>verify</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+
+                <!-- ── SonarCloud / SonarQube ───────────────────
+                     ADDED: explicit sonar-maven-plugin declaration for
+                     SonarCloud SAST integration (CI/CD toolchain requirement).
+                     Configure sonar.login via CI environment variable.
+                -->
+                <plugin>
+                    <groupId>org.sonarsource.scanner.maven</groupId>
+                    <artifactId>sonar-maven-plugin</artifactId>
+                    <version>4.0.0.4121</version>
+                </plugin>
+
+            </plugins>
+        </pluginManagement>
+
+        <plugins>
+            <!-- Enforce minimum Maven and Java versions project-wide -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>enforce-versions</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <!-- CHANGED: minimum Java raised to 17 -->
+                                <requireJavaVersion>
+                                    <version>[17,)</version>
+                                    <message>Spring Boot 3.x requires Java 17 or higher.</message>
+                                </requireJavaVersion>
+                                <requireMavenVersion>
+                                    <version>[3.8,)</version>
+                                </requireMavenVersion>
+                                <!-- ADDED: ban vulnerable transitive versions of key libraries -->
+                                <bannedDependencies>
+                                    <excludes>
+                                        <!-- Ban old commons-fileupload (CVE-2016-1000031) -->
+                                        <exclude>commons-fileupload:commons-fileupload:[,1.5)</exclude>
+                                        <!-- Ban old postgresql driver (CVE-2022-21724) -->
+                                        <exclude>org.postgresql:postgresql:[,42.7.0)</exclude>
+                                        <!-- Ban old jjwt single-artifact (algorithm confusion) -->
+                                        <exclude>io.jsonwebtoken:jjwt:[,0.12.0)</exclude>
+                                        <!-- Ban Springfox — incompatible with Spring Boot 3.x -->
+                                        <exclude>io.springfox:springfox-swagger2</exclude>
+                                        <exclude>io.springfox:springfox-swagger-ui</exclude>
+                                        <exclude>io.springfox:springfox-boot-starter</exclude>
+                                    </excludes>
+                                    <searchTransitive>true</searchTransitive>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <!-- =========================================================
+         Profiles
+    ========================================================= -->
+    <profiles>
+
+        <!-- Integration / smoke test profile
+             Activated by CI pipelines (Jenkins, CircleCI) for full
+             regression validation as described in the spec.
+        -->
+        <profile>
+            <id>integration-test</id>
+            <activation>
+                <property>
+                    <!-- Activate with: mvn verify -Pintegration-test -->
+                    <name>integration-test</name>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- SonarCloud SAST profile
+             Activated in CI with: mvn verify sonar:sonar -Psonar
+             Requires SONAR_TOKEN environment variable.
+        -->
+        <profile>
+            <id>sonar</id>
+            <properties>
+                <!-- ADDED: token passed via CI env var, not hardcoded -->
+                <sonar.token>${env.SONAR_TOKEN}</sonar.token>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.sonarsource.scanner.maven</groupId>
+                        <artifactId>sonar-maven-plugin</artifactId>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <!-- Docker / container build profile
+             Containerized: True per upgrade context.
+             Uses Spring Boot's built-in Buildpacks support (no Dockerfile needed)
+             or can be combined with a Dockerfile in each deployable module.
+        -->
+        <profile>
+            <id>docker</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>build-image</id>
+                                <goals>
+                                    <!-- ADDED: build-image goal uses Cloud Native Buildpacks.
+                                         Ensure the builder image supports Java 17.
+                                         Default builder: paketobuildpacks/builder:base -->
+                                    <goal>build-image</goal>
+                                </goals>
+                                <configuration>
+                                    <image>
+                                        <!-- CHANGED: Java 17 BP_JVM_VERSION required -->
+                                        <env>
+                                            <BP_JVM_VERSION>17</BP_JVM_VERSION>
+                                        </env>
+                                    </image>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+    </profiles>
+
+    <!-- =========================================================
+         Repository declarations
+         Drools 9.x / KIE artifacts may require the JBoss/Red Hat
+         Maven repository if not yet mirrored to Maven Central.
+    ========================================================= -->
+    <repositories>
+        <repository>
+            <id>central</id>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+        <!-- ADDED: JBoss public repository for Drools 9.x / KIE artifacts -->
+        <repository>
+            <id>jboss-public</id>
+            <name>JBoss Public Maven Repository</name>
+            <url>https://repository.jboss.org/nexus/content/groups/public/</url>
+            <releases>
+                <enabled>true</enabled>
+            </releases>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
+
+    <pluginRepositories>
+        <pluginRepository>
+            <id>central</id>
+            <url>https://repo.maven.apache.org/maven2</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </pluginRepository>
+    </pluginRepositories>
+
+</project>
