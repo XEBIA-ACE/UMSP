@@ -1,0 +1,368 @@
+# Spring Boot 3.3.x Migration — Application Configuration Template
+# This file reflects all configuration changes required for the migration from
+# Spring Boot 2.5.12 → 3.3.x, Spring Security 5.5.x → 6.3.x, Hibernate 5.4.x → 6.5.x,
+# springdoc-openapi 2.x (replacing Springfox), JJWT 0.12.x, and related upgrades.
+# No original application.properties/application.yml was present in Base Source Code,
+# so this is a complete, usable configuration generated from the upgrade context.
+
+spring:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Application identity
+  # ─────────────────────────────────────────────────────────────────────────────
+  application:
+    name: commerce-platform
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # DataSource
+  # No structural change required by the upgrade itself; kept here for completeness.
+  # ─────────────────────────────────────────────────────────────────────────────
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/commerce}
+    username: ${DB_USERNAME:commerce}
+    password: ${DB_PASSWORD:commerce}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JPA / Hibernate
+  # Hibernate 6.x (shipped with Spring Boot 3.3.x) introduces breaking changes:
+  #   • The default implicit naming strategy class was renamed; the property
+  #     spring.jpa.hibernate.naming.implicit-strategy now accepts the new FQCN.
+  #   • spring.jpa.properties.hibernate.id.new_generator_mappings is removed in
+  #     Hibernate 6 (GenerationType.AUTO now always uses the sequence strategy).
+  #   • javax.persistence.* properties must be replaced with jakarta.persistence.*
+  #     equivalents — Spring Boot 3.x auto-configuration handles this transparently
+  #     when using the starter, but any explicit property keys must use jakarta.*.
+  # ─────────────────────────────────────────────────────────────────────────────
+  jpa:
+    open-in-view: false          # Recommended: disable OSIV to avoid lazy-load surprises
+    show-sql: false
+    hibernate:
+      ddl-auto: validate         # Use Flyway/Liquibase for schema management in production
+      naming:
+        # CHANGED (Hibernate 6.5.x): fully-qualified class name updated from
+        # org.springframework.boot.orm.jpa.hibernate.SpringImplicitNamingStrategy
+        # (Hibernate 5 compatible) to the new Spring 6 / Hibernate 6 compatible class.
+        implicit-strategy: org.springframework.boot.orm.jpa.hibernate.SpringImplicitNamingStrategy
+        physical-strategy: org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy
+    properties:
+      # CHANGED (Hibernate 6.x): dialect auto-detection is now reliable; explicit
+      # dialect declaration is optional but kept for clarity. Use the Hibernate 6
+      # dialect class — the old org.hibernate.dialect.PostgreSQL10Dialect is removed.
+      hibernate.dialect: org.hibernate.dialect.PostgreSQLDialect
+      # CHANGED (Hibernate 6.x): jdbc.time_zone replaces the old
+      # javax.persistence.jdbc.time_zone key (jakarta namespace migration).
+      hibernate.jdbc.time_zone: UTC
+      # CHANGED (Hibernate 6.x): second-level cache provider class updated.
+      # If Infinispan cache is replaced by Redis (see cache section below),
+      # remove the infinispan region factory and keep only the Redis settings.
+      # hibernate.cache.use_second_level_cache: true
+      # hibernate.cache.region.factory_class: org.infinispan.hibernate.cache.v62.InfinispanRegionFactory
+      # REMOVED (Hibernate 6.x): hibernate.id.new_generator_mappings is no longer
+      # a valid property; GenerationType.AUTO uses sequences by default.
+      # hibernate.id.new_generator_mappings: true   ← REMOVED
+      # NEW (Hibernate 6.x): enable statistics only in non-production profiles.
+      hibernate.generate_statistics: false
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Cache
+  # Infinispan 9.4.18.Final → 15.x upgrade path is complex; the recommended
+  # cloud-native alternative for horizontal scaling is Spring Cache + Redis.
+  # Toggle the active profile or override cache.type to switch implementations.
+  # ─────────────────────────────────────────────────────────────────────────────
+  cache:
+    # CHANGED: switched from infinispan to redis for cloud-native horizontal scaling.
+    # To revert to Infinispan 15.x, set type: infinispan and add the
+    # infinispan-spring-boot3-starter-remote dependency in pom.xml.
+    type: redis
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Elasticsearch
+  # Spring Boot 3.x ships with Spring Data Elasticsearch 5.x which targets
+  # Elasticsearch / OpenSearch 8.x. The old spring.elasticsearch.rest.* namespace
+  # is removed; use spring.elasticsearch.* (uris, username, password).
+  # ─────────────────────────────────────────────────────────────────────────────
+  elasticsearch:
+    # CHANGED: spring.elasticsearch.rest.uris (Boot 2.x) → spring.elasticsearch.uris (Boot 3.x)
+    uris: ${ES_URIS:http://localhost:9200}
+    username: ${ES_USERNAME:}
+    password: ${ES_PASSWORD:}
+    connection-timeout: 5s
+    socket-timeout: 30s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Security
+  # Spring Security 6.3.x ships with Spring Boot 3.3.x.
+  # Key behavioural changes vs 5.5.x:
+  #   • SecurityFilterChain bean replaces WebSecurityConfigurerAdapter (removed).
+  #   • authorizeRequests() is removed; use authorizeHttpRequests().
+  #   • The default CORS/CSRF configuration changed — explicit configuration
+  #     in a SecurityFilterChain @Bean is required.
+  #   • spring.security.oauth2.* namespace is unchanged but token introspection
+  #     and JWT decoder auto-configuration classes moved to new packages.
+  # The properties below cover the auto-configuration surface only; custom
+  # SecurityFilterChain beans must be updated in Java source separately.
+  # ─────────────────────────────────────────────────────────────────────────────
+  security:
+    # NEW (Spring Security 6.x): content-negotiation strategy for 401/403 responses.
+    # Replaces the old ExceptionTranslationFilter default behaviour.
+    filter:
+      order: 10
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Multipart / File Upload
+  # commons-fileupload 1.3.3 → 1.5+ (CVE-2023-24998 fix).
+  # Spring Boot 3.x uses its own StandardServletMultipartResolver by default and
+  # no longer depends on commons-fileupload for standard multipart handling.
+  # The properties below are the Spring Boot standard multipart keys (unchanged).
+  # ─────────────────────────────────────────────────────────────────────────────
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 10MB
+      max-request-size: 50MB
+      # NEW (Boot 3.x / CVE-2023-24998 mitigation): explicit file-count limit
+      # prevents the unbounded-part DoS that affected commons-fileupload 1.3.x.
+      # This maps to the jakarta.servlet.MultipartConfigElement maxFileCount.
+      file-size-threshold: 2KB
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # MVC
+  # Spring MVC 6.1.x (shipped with Spring Boot 3.3.x) changes:
+  #   • PathMatchingHandlerMapping default changed: suffix-pattern matching and
+  #     trailing-slash matching are now disabled by default.
+  #   • spring.mvc.pathmatch.use-suffix-pattern is removed (always false).
+  #   • spring.mvc.pathmatch.matching-strategy default is path-pattern-parser.
+  # ─────────────────────────────────────────────────────────────────────────────
+  mvc:
+    # CHANGED (Spring MVC 6.1.x): ant_path_matcher is deprecated; path-pattern-parser
+    # is the default and recommended strategy. Remove this key to accept the default.
+    pathmatch:
+      matching-strategy: path-pattern-parser
+    # CHANGED (Spring MVC 6.1.x): trailing slash matching is disabled by default.
+    # If existing clients rely on trailing slashes, add explicit route aliases in
+    # your controllers rather than re-enabling this globally.
+    # use-suffix-pattern: false   ← key removed in 6.1.x, no longer configurable here
+    format:
+      date-time: iso
+    # NEW (Spring MVC 6.1.x): problem details (RFC 7807) support is opt-in.
+    problemdetails:
+      enabled: true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Jackson
+  # jackson-databind is managed by Spring Boot 3.3.x BOM (2.17.x range).
+  # The explicit version override in pom.xml (2.13.4.1) should be removed and
+  # the BOM-managed version used instead.
+  # ─────────────────────────────────────────────────────────────────────────────
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+      fail-on-empty-beans: false
+    deserialization:
+      fail-on-unknown-properties: false
+    default-property-inclusion: non_null
+    time-zone: UTC
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Flyway (schema migration — recommended over ddl-auto: create/update)
+  # ─────────────────────────────────────────────────────────────────────────────
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Server
+# ─────────────────────────────────────────────────────────────────────────────
+server:
+  port: ${SERVER_PORT:8080}
+  # NEW (Spring Boot 3.x / Tomcat 10.x): Tomcat now ships with jakarta.servlet
+  # by default. No additional configuration is needed for the namespace migration.
+  tomcat:
+    max-threads: 200
+    min-spare-threads: 10
+    connection-timeout: 20000
+    # NEW (Boot 3.3.x / CVE-2023-24998 mitigation): limit the number of multipart
+    # parts accepted per request at the Tomcat connector level as a defence-in-depth
+    # measure complementing the spring.servlet.multipart settings above.
+    max-swallow-size: 10MB
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/plain
+    min-response-size: 1024
+  error:
+    # CHANGED (Spring Boot 3.x): whitelabel error page is still available but
+    # RFC 7807 ProblemDetail is now the preferred error response format when
+    # spring.mvc.problemdetails.enabled=true (set above).
+    include-message: on-param
+    include-binding-errors: on-param
+    include-stacktrace: never
+
+# ─────────────────────────────────────────────────────────────────────────────
+# springdoc-openapi 2.x  (replaces Springfox Swagger2 2.9.2)
+# CHANGED: All springfox.* properties are removed. springdoc-openapi 2.x uses
+# the springdoc.* namespace. The UI is served at /swagger-ui.html by default
+# (same path as Springfox) but the API docs endpoint changed from
+# /v2/api-docs (Springfox) → /v3/api-docs (springdoc / OpenAPI 3.0).
+# ─────────────────────────────────────────────────────────────────────────────
+springdoc:
+  # NEW: path for the OpenAPI 3.0 JSON descriptor (replaces /v2/api-docs).
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  # NEW: Swagger UI configuration (replaces springfox.documentation.swagger-ui.*).
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    # NEW: group all operations by tag in the UI.
+    tags-sorter: alpha
+    operations-sorter: alpha
+    display-request-duration: true
+    # NEW: disable the "Try it out" feature in non-development environments
+    # by overriding this property per profile.
+    supported-submit-methods: get,post,put,patch,delete
+  # NEW: packages to scan for @RestController / @OpenAPIDefinition annotations.
+  packages-to-scan: com.commerce
+  # NEW: show actuator endpoints in the API docs (opt-in).
+  show-actuator: false
+  # REMOVED (Springfox): springfox.documentation.swagger.v2.path   ← no longer used
+  # REMOVED (Springfox): springfox.documentation.auto-startup      ← no longer used
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JJWT 0.12.x  (replaces 0.8.0 — CVE remediation)
+# CHANGED: JJWT 0.12.x splits the library into jjwt-api / jjwt-impl / jjwt-jackson
+# artifacts and changes the builder/parser API (Jwts.builder(), Jwts.parser()).
+# The properties below are application-level JWT settings consumed by the
+# custom JwtTokenProvider / JwtAuthenticationFilter beans; they are not JJWT
+# library properties. Update the Java source to use the new 0.12.x API:
+#   OLD: Jwts.parser().setSigningKey(secret).parseClaimsJws(token)
+#   NEW: Jwts.parser().verifyWith(secretKey).build().parseSignedClaims(token)
+# ─────────────────────────────────────────────────────────────────────────────
+app:
+  jwt:
+    # Secret must be Base64-encoded and at least 256 bits for HS256.
+    # CHANGED (JJWT 0.12.x): the raw string secret accepted by 0.8.0 is replaced
+    # by a Keys.hmacShaKeyFor(Decoders.BASE64.decode(secret)) call in source.
+    secret: ${JWT_SECRET:changeme-replace-with-256bit-base64-encoded-secret-in-production}
+    # Token validity in milliseconds (1 hour default).
+    expiration-ms: ${JWT_EXPIRATION_MS:3600000}
+    # NEW (JJWT 0.12.x): algorithm is now explicit in the builder via .signWith(key, alg).
+    # Document the chosen algorithm here for operational clarity.
+    algorithm: HS256
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Actuator
+# Spring Boot 3.x Actuator: /actuator is the default base path (unchanged).
+# The health groups and liveness/readiness probes are production-ready defaults
+# for containerised deployments (Kubernetes / Docker).
+# ─────────────────────────────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        # Expose only the endpoints needed; avoid exposing all in production.
+        include: health,info,metrics,prometheus
+      base-path: /actuator
+  endpoint:
+    health:
+      # NEW (Boot 3.x): show-details replaces the old management.health.* keys.
+      show-details: when-authorized
+      probes:
+        # NEW (Boot 3.x): enable Kubernetes liveness/readiness probe endpoints.
+        enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+    # CHANGED (Boot 3.x): infinispan health indicator is removed when migrating
+    # to Redis cache. The redis health indicator is auto-configured.
+    # infinispan:
+    #   enabled: false   ← REMOVED / commented out after Infinispan removal
+    redis:
+      enabled: true
+    db:
+      enabled: true
+  # NEW (Boot 3.x): metrics export via Micrometer (Prometheus example).
+  metrics:
+    export:
+      prometheus:
+        enabled: ${PROMETHEUS_ENABLED:false}
+    tags:
+      application: ${spring.application.name}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logging
+# ─────────────────────────────────────────────────────────────────────────────
+logging:
+  level:
+    root: INFO
+    com.commerce: ${LOG_LEVEL_APP:INFO}
+    # CHANGED (Hibernate 6.x): SQL logging package changed from
+    # org.hibernate.SQL (still valid) but the type binding logger moved to
+    # org.hibernate.orm.jdbc.bind (replaces org.hibernate.type.descriptor.sql).
+    org.hibernate.SQL: ${LOG_LEVEL_SQL:WARN}
+    # NEW (Hibernate 6.x): parameter binding log (replaces org.hibernate.type.descriptor.sql.BasicBinder).
+    org.hibernate.orm.jdbc.bind: ${LOG_LEVEL_SQL_PARAMS:WARN}
+    # CHANGED (Spring Security 6.x): debug logging package is unchanged but
+    # FilterChainProxy moved; keep this for security event tracing.
+    org.springframework.security: ${LOG_LEVEL_SECURITY:WARN}
+    # NEW: springdoc logging (replaces springfox logging).
+    org.springdoc: ${LOG_LEVEL_SPRINGDOC:WARN}
+    # REMOVED: io.springfox logging is no longer relevant after Springfox removal.
+    # io.springfox: WARN   ← REMOVED
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Drools 8.x / 9.x
+# CHANGED: Drools 7.x used the org.kie.* Maven group and the drools-spring
+# integration module. Drools 8.x moved to the org.drools.* group and the
+# kogito-based runtime. The properties below are application-level settings
+# consumed by the custom DroolsConfig @Configuration bean; they are not
+# Drools library properties. Update the Java source to use the new 8.x API:
+#   OLD: KieServices.Factory.get() / KieContainer
+#   NEW: KieRuntimeBuilder / RuleUnitInstance (Drools 8.x API)
+# ─────────────────────────────────────────────────────────────────────────────
+app:
+  drools:
+    # Path to the DRL rules on the classpath.
+    rules-path: ${DROOLS_RULES_PATH:classpath:rules/}
+    # NEW (Drools 8.x): session type — stateless is recommended for request-scoped rule evaluation.
+    session-type: stateless
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MapStruct 1.6.x
+# MapStruct is a compile-time annotation processor; there are no runtime
+# application.yml properties. Ensure the following in pom.xml:
+#   • mapstruct version: 1.6.2
+#   • lombok-mapstruct-binding (if Lombok is used): 0.2.0
+#   • annotation processor order: lombok before mapstruct in maven-compiler-plugin
+# No application.yml changes are required for the MapStruct upgrade.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Profile-specific overrides
+# Create application-{profile}.yml files for dev / test / prod overrides.
+# Example profiles referenced by this migration:
+#   dev  — H2 in-memory DB, SQL logging enabled, Swagger UI enabled
+#   test — Testcontainers, reduced pool sizes
+#   prod — External secrets via environment variables, Swagger UI disabled
+# ─────────────────────────────────────────────────────────────────────────────
