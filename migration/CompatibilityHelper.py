@@ -2,731 +2,840 @@
 # Compatibility shim for Flask 1.x -> 3.1 and SQLAlchemy 1.3 -> 2.0 migration
 # Python 3.8 -> 3.12/3.13 upgrade helper
 #
-# Usage: Import this module early in your application to activate shims,
-# or run directly to execute config migration utilities.
+# Usage: import this module early in your application bootstrap to apply shims,
+# or run it directly as a script to perform config migration:
+#   python migration_shim.py --migrate-config <old_config.py> --output <new_config.py>
 
-import warnings
+from __future__ import annotations
+
+import importlib
+import logging
 import os
 import sys
-import functools
+import types
+import warnings
 from typing import Any, Callable, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Python version guard
 # ---------------------------------------------------------------------------
 
-if sys.version_info < (3, 12):
+if sys.version_info < (3, 10):
     warnings.warn(
-        "This project targets Python 3.12 or 3.13. "
-        f"You are running Python {sys.version}. "
-        "Upgrade your interpreter to match the modernized stack.",
+        "This shim targets Python 3.12/3.13. You are running "
+        f"{sys.version}. Upgrade Python before deploying to production.",
         DeprecationWarning,
         stacklevel=2,
     )
 
-# ---------------------------------------------------------------------------
-# Flask compatibility shims  (Flask 1.x -> 3.1)
-# ---------------------------------------------------------------------------
-
-try:
-    import flask as _flask
-    from flask import Flask as _Flask
-
-    _flask_version = tuple(int(x) for x in _flask.__version__.split(".")[:2])
-
-    # ------------------------------------------------------------------
-    # Removed in Flask 2.x: flask.json.jsonify moved; helpers consolidated
-    # ------------------------------------------------------------------
-
-    # Flask 1.x exposed flask.json.JSONEncoder / JSONDecoder as class attrs
-    # on the app.  Flask 2.3+ removed app.json_encoder / app.json_decoder.
-    # Provide a drop-in decorator that registers a custom provider instead.
-    if _flask_version >= (2, 3):
-        from flask.json.provider import DefaultJSONProvider as _DefaultJSONProvider
-
-        def register_json_encoder(app: _Flask, encoder_cls: type) -> None:
-            """
-            Flask 1.x pattern:  app.json_encoder = MyEncoder
-            Flask 3.x pattern:  use a JSONProvider subclass.
-
-            This helper wraps the old encoder class in a DefaultJSONProvider
-            so existing JSONEncoder subclasses keep working with minimal changes.
-            """
-            # TODO: Manually review custom JSONEncoder.default() implementations.
-            # Flask 3.x JSONProvider.default() has a different signature.
-            # Breaking change: https://flask.palletsprojects.com/en/3.0.x/api/#flask.json.provider.JSONProvider
-            class _CompatProvider(_DefaultJSONProvider):
-                def default(self, o: Any) -> Any:
-                    enc = encoder_cls()
-                    try:
-                        return enc.default(o)
-                    except TypeError:
-                        return super().default(o)
-
-            app.json_provider_class = _CompatProvider
-            app.json = _CompatProvider(app)
-
-    else:
-        def register_json_encoder(app: _Flask, encoder_cls: type) -> None:
-            """Flask 1.x / 2.x compatible path — sets app.json_encoder directly."""
-            app.json_encoder = encoder_cls  # type: ignore[attr-defined]
-
-    # ------------------------------------------------------------------
-    # Removed in Flask 2.0: before_first_request
-    # ------------------------------------------------------------------
-
-    def before_first_request(app: _Flask, f: Callable) -> Callable:
-        """
-        Flask 1.x: @app.before_first_request
-        Flask 2.3+: decorator removed.
-
-        Replacement: use with app.app_context() at startup, or call the
-        function inside the application factory after app creation.
-
-        This shim executes the function once on the first request using a
-        with_appcontext wrapper registered via before_request.
-        """
-        # TODO: Migrate before_first_request usages to the application factory
-        # pattern (create_app).  The shim below is a stopgap only.
-        # Breaking change ref: https://flask.palletsprojects.com/en/2.3.x/changes/#version-2-3-0
-        _called = {"done": False}
-
-        @app.before_request
-        def _wrapper() -> None:
-            if not _called["done"]:
-                _called["done"] = True
-                f()
-
-        return f
-
-    # ------------------------------------------------------------------
-    # Removed in Flask 2.0: flask.ext namespace
-    # ------------------------------------------------------------------
-    # TODO: Remove all `from flask.ext import X` imports in your codebase.
-    # Flask 3.x no longer supports the flask.ext shim namespace.
-    # Replace with direct package imports, e.g. `from flask_sqlalchemy import SQLAlchemy`.
-
-    # ------------------------------------------------------------------
-    # Renamed in Flask 2.0: flask.escape -> markupsafe.escape
-    # ------------------------------------------------------------------
-    try:
-        from flask import escape as _flask_escape  # type: ignore[attr-defined]
-    except ImportError:
-        try:
-            from markupsafe import escape  # noqa: F401  re-export
-        except ImportError:
-            pass
-    else:
-        from markupsafe import escape  # noqa: F401  re-export
-        warnings.warn(
-            "flask.escape is removed in Flask 2.x+. "
-            "Use `from markupsafe import escape` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    # ------------------------------------------------------------------
-    # Renamed in Flask 2.0: flask.Markup -> markupsafe.Markup
-    # ------------------------------------------------------------------
-    try:
-        from flask import Markup as _flask_Markup  # type: ignore[attr-defined]
-    except ImportError:
-        try:
-            from markupsafe import Markup  # noqa: F401  re-export
-        except ImportError:
-            pass
-    else:
-        from markupsafe import Markup  # noqa: F401  re-export
-        warnings.warn(
-            "flask.Markup is removed in Flask 2.x+. "
-            "Use `from markupsafe import Markup` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    # ------------------------------------------------------------------
-    # Application factory helper
-    # ------------------------------------------------------------------
-
-    def create_app_factory(
-        config_object: Optional[Any] = None,
-        config_mapping: Optional[Dict[str, Any]] = None,
-    ) -> _Flask:
-        """
-        Minimal application factory conforming to Flask 3.x best practices.
-
-        Flask 1.x apps were commonly created at module level (global app object).
-        Flask 3.x strongly recommends the application factory pattern.
-
-        TODO: Replace your module-level `app = Flask(__name__)` with a
-        `create_app()` factory function.  See:
-        https://flask.palletsprojects.com/en/3.0.x/patterns/appfactories/
-        """
-        app = _Flask(__name__)
-
-        if config_object is not None:
-            app.config.from_object(config_object)
-
-        if config_mapping is not None:
-            app.config.from_mapping(config_mapping)
-
-        # Load secrets from environment — replaces hardcoded credentials.
-        # TODO: Ensure all secrets (SECRET_KEY, DB passwords, API keys) are
-        # provided via environment variables, not hardcoded in config files.
-        app.config.setdefault("SECRET_KEY", os.environ.get("SECRET_KEY", ""))
-        if not app.config["SECRET_KEY"]:
-            warnings.warn(
-                "SECRET_KEY is not set via environment variable SECRET_KEY. "
-                "Hardcoded or empty secret keys are a security risk.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-
-        return app
-
-    # ------------------------------------------------------------------
-    # Removed in Flask 3.0: flask.signals (blinker now required)
-    # ------------------------------------------------------------------
-    # TODO: Add `blinker` to your requirements if you use Flask signals.
-    # Flask 3.0 made blinker a hard dependency; signals are no longer optional.
-
-except ImportError:
-    warnings.warn(
-        "Flask is not installed. Flask shims will not be active.",
-        ImportWarning,
-        stacklevel=2,
-    )
+# ===========================================================================
+# SECTION 1 — Flask 1.x → 3.1 compatibility shims
+# ===========================================================================
 
 # ---------------------------------------------------------------------------
-# SQLAlchemy compatibility shims  (1.3 -> 2.0)
+# 1a. Application factory helper
+#     Flask 3.x strongly recommends the application factory pattern.
+#     If your project calls Flask(__name__) at module level, wrap it here.
 # ---------------------------------------------------------------------------
 
-try:
-    import sqlalchemy as _sa
-
-    _sa_version = tuple(int(x) for x in _sa.__version__.split(".")[:2])
-
-    # ------------------------------------------------------------------
-    # Legacy Query API -> 2.0 select() style
-    # ------------------------------------------------------------------
-
-    def legacy_query_warning(method_name: str) -> None:
-        warnings.warn(
-            f"SQLAlchemy 1.x Session.query() used via '{method_name}'. "
-            "Session.query() is legacy in SQLAlchemy 2.0. "
-            "Migrate to `select()` statements: "
-            "https://docs.sqlalchemy.org/en/20/orm/queryguide/",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-
-    class LegacyQueryShim:
-        """
-        Wraps a SQLAlchemy 2.0 Session to intercept .query() calls and
-        emit deprecation warnings, while still delegating to the legacy
-        interface (available via Session(future=False) or the legacy bundle).
-
-        TODO: Replace all Session.query(Model).filter(...).all() patterns
-        with the 2.0 select() API:
-            from sqlalchemy import select
-            stmt = select(Model).where(Model.col == value)
-            results = session.execute(stmt).scalars().all()
-        Breaking change: https://docs.sqlalchemy.org/en/20/changelog/migration_20.html#orm-query-unified-with-core-select
-        """
-
-        def __init__(self, session: Any) -> None:
-            self._session = session
-
-        def query(self, *entities: Any, **kwargs: Any) -> Any:
-            legacy_query_warning("Session.query")
-            return self._session.query(*entities, **kwargs)
-
-        def __getattr__(self, name: str) -> Any:
-            return getattr(self._session, name)
-
-    # ------------------------------------------------------------------
-    # Removed in 2.0: session.execute(string) without text()
-    # ------------------------------------------------------------------
-
-    def safe_execute(session: Any, statement: Any, params: Optional[Dict] = None) -> Any:
-        """
-        SQLAlchemy 1.x allowed session.execute("SELECT ...").
-        SQLAlchemy 2.0 requires sqlalchemy.text() for raw SQL strings.
-
-        This helper wraps raw strings automatically.
-
-        TODO: Replace direct string execution in your codebase with
-        `sqlalchemy.text()` explicitly for clarity and safety.
-        Breaking change: https://docs.sqlalchemy.org/en/20/changelog/migration_20.html#change-4617
-        """
-        from sqlalchemy import text as _text
-
-        if isinstance(statement, str):
-            warnings.warn(
-                "Passing a raw string to session.execute() is not supported "
-                "in SQLAlchemy 2.0. Wrapping in sqlalchemy.text() automatically. "
-                "Update your code to use text() explicitly.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            statement = _text(statement)
-
-        if params is not None:
-            return session.execute(statement, params)
-        return session.execute(statement)
-
-    # ------------------------------------------------------------------
-    # Removed in 2.0: Query.get() -> Session.get()
-    # ------------------------------------------------------------------
-
-    def session_get(session: Any, model: type, ident: Any) -> Any:
-        """
-        SQLAlchemy 1.x: Model.query.get(pk)  or  session.query(Model).get(pk)
-        SQLAlchemy 2.0: session.get(Model, pk)
-
-        This helper provides a unified call that works on 2.0 and emits a
-        warning when the legacy path would have been used.
-
-        TODO: Replace all `.query.get(pk)` usages with `session.get(Model, pk)`.
-        Breaking change: https://docs.sqlalchemy.org/en/20/changelog/migration_20.html#orm-query-get-method-moved-to-session
-        """
-        if _sa_version >= (2, 0):
-            return session.get(model, ident)
-        else:
-            warnings.warn(
-                "session_get() shim: using legacy Query.get(). "
-                "Upgrade to SQLAlchemy 2.0 and use session.get(Model, pk).",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            return session.query(model).get(ident)  # type: ignore[attr-defined]
-
-    # ------------------------------------------------------------------
-    # Removed in 2.0: autocommit mode on Session
-    # ------------------------------------------------------------------
-    # TODO: Remove Session(autocommit=True) usage.  SQLAlchemy 2.0 removed
-    # autocommit mode entirely.  Use explicit session.commit() / session.begin().
-    # Breaking change: https://docs.sqlalchemy.org/en/20/changelog/migration_20.html#autocommit-mode-removed
-
-    # ------------------------------------------------------------------
-    # Changed in 2.0: Engine.execute() removed
-    # ------------------------------------------------------------------
-
-    def engine_execute(engine: Any, statement: Any, params: Optional[Dict] = None) -> Any:
-        """
-        SQLAlchemy 1.x: engine.execute(stmt)
-        SQLAlchemy 2.0: engine.execute() removed; use engine.connect() context manager.
-
-        TODO: Replace engine.execute() with:
-            with engine.connect() as conn:
-                result = conn.execute(text("..."))
-        Breaking change: https://docs.sqlalchemy.org/en/20/changelog/migration_20.html#engine-execute-removed
-        """
-        from sqlalchemy import text as _text
-
-        warnings.warn(
-            "engine.execute() is removed in SQLAlchemy 2.0. "
-            "Use `with engine.connect() as conn: conn.execute(...)` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if isinstance(statement, str):
-            statement = _text(statement)
-
-        with engine.connect() as conn:
-            if params is not None:
-                result = conn.execute(statement, params)
-            else:
-                result = conn.execute(statement)
-            conn.commit()
-            return result
-
-    # ------------------------------------------------------------------
-    # Changed in 2.0: declarative_base() moved
-    # ------------------------------------------------------------------
-    # SQLAlchemy 1.x: from sqlalchemy.ext.declarative import declarative_base
-    # SQLAlchemy 2.0: from sqlalchemy.orm import declarative_base  (then DeclarativeBase)
-
-    try:
-        from sqlalchemy.orm import declarative_base  # noqa: F401  (2.0+)
-    except ImportError:
-        try:
-            from sqlalchemy.ext.declarative import declarative_base  # type: ignore[no-redef]  # noqa: F401
-            warnings.warn(
-                "sqlalchemy.ext.declarative.declarative_base is deprecated. "
-                "Use `from sqlalchemy.orm import declarative_base` (SQLAlchemy 1.4+) "
-                "or `sqlalchemy.orm.DeclarativeBase` (SQLAlchemy 2.0+).",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        except ImportError:
-            pass
-
-    # TODO: In SQLAlchemy 2.0, prefer the new DeclarativeBase class syntax:
-    #   from sqlalchemy.orm import DeclarativeBase
-    #   class Base(DeclarativeBase): pass
-    # This replaces declarative_base() entirely.
-    # Breaking change: https://docs.sqlalchemy.org/en/20/changelog/migration_20.html#orm-declarative-mapping
-
-    # ------------------------------------------------------------------
-    # Changed in 2.0: relationship() lazy loading behaviour
-    # ------------------------------------------------------------------
-    # TODO: SQLAlchemy 2.0 raises an error for lazy-loaded relationships
-    # accessed outside a session.  Audit all relationship() definitions and
-    # add explicit lazy="select", lazy="joined", or lazy="subquery" as needed.
-    # Breaking change: https://docs.sqlalchemy.org/en/20/changelog/migration_20.html#lazy-loading-for-relationship-raises-by-default
-
-except ImportError:
-    warnings.warn(
-        "SQLAlchemy is not installed. SQLAlchemy shims will not be active.",
-        ImportWarning,
-        stacklevel=2,
-    )
-
-# ---------------------------------------------------------------------------
-# Config format migration utility
-# ---------------------------------------------------------------------------
-
-def migrate_flask_config(old_config: Dict[str, Any]) -> Dict[str, Any]:
+def create_app_factory(config_object: Optional[Any] = None) -> "flask.Flask":
     """
-    Transforms a Flask 1.x style config dictionary to a Flask 3.x compatible one.
+    Drop-in application factory compatible with Flask 3.1.
 
-    Handles:
-    - PROPAGATE_EXCEPTIONS default change
-    - JSON_AS_ASCII removal
-    - JSON_SORT_KEYS removal
-    - JSONIFY_PRETTYPRINT_REGULAR removal
-    - JSONIFY_MIMETYPE change
-    - TEMPLATES_AUTO_RELOAD moved to Jinja env
-    - Hardcoded SECRET_KEY -> environment variable reference warning
-    - DATABASE_URI -> SQLALCHEMY_DATABASE_URI normalisation
+    Replace any module-level ``app = Flask(__name__)`` with::
+
+        from migration_shim import create_app_factory
+        app = create_app_factory()
+
+    TODO: Move all ``app.route`` decorators and extension initialisation
+    (db.init_app, login_manager.init_app, etc.) inside this factory.
+    See Flask 3.x breaking change: application context is no longer pushed
+    automatically outside of a request/app context.
     """
-    new_config: Dict[str, Any] = {}
-
-    # Removed JSON config keys in Flask 2.2+
-    _removed_json_keys = {
-        "JSON_AS_ASCII",
-        "JSON_SORT_KEYS",
-        "JSONIFY_PRETTYPRINT_REGULAR",
-        "JSONIFY_MIMETYPE",
-    }
-
-    for key, value in old_config.items():
-        if key in _removed_json_keys:
-            # TODO: Configure JSON behaviour via app.json (JSONProvider) in Flask 3.x.
-            # Breaking change: https://flask.palletsprojects.com/en/3.0.x/api/#flask.Flask.json
-            warnings.warn(
-                f"Config key '{key}' is removed in Flask 2.2+. "
-                "Configure JSON behaviour via app.json provider instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            continue  # drop from new config
-
-        if key == "TEMPLATES_AUTO_RELOAD":
-            # TODO: Set app.jinja_env.auto_reload = True in your factory instead.
-            warnings.warn(
-                "TEMPLATES_AUTO_RELOAD config key is deprecated in Flask 2.x. "
-                "Set app.jinja_env.auto_reload directly.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            new_config[key] = value
-            continue
-
-        if key == "SECRET_KEY":
-            if not isinstance(value, str) or (
-                value and value not in ("", "dev", "development", "changeme")
-            ):
-                # Looks like a real hardcoded secret
-                # TODO: Remove hardcoded SECRET_KEY from config.
-                # Store it in an environment variable and load with:
-                #   app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
-                warnings.warn(
-                    "Hardcoded SECRET_KEY detected in config. "
-                    "Move this value to the SECRET_KEY environment variable.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-            new_config[key] = os.environ.get("SECRET_KEY", value)
-            continue
-
-        # Normalise legacy DATABASE_URI -> SQLALCHEMY_DATABASE_URI
-        if key == "DATABASE_URI":
-            warnings.warn(
-                "Config key 'DATABASE_URI' is not a standard Flask/SQLAlchemy key. "
-                "Renaming to 'SQLALCHEMY_DATABASE_URI'.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            new_config["SQLALCHEMY_DATABASE_URI"] = _migrate_db_uri(value)
-            continue
-
-        if key == "SQLALCHEMY_DATABASE_URI":
-            new_config[key] = _migrate_db_uri(value)
-            continue
-
-        # SQLAlchemy 2.0: SQLALCHEMY_TRACK_MODIFICATIONS defaults to False and
-        # the key is removed in Flask-SQLAlchemy 3.x.
-        if key == "SQLALCHEMY_TRACK_MODIFICATIONS":
-            warnings.warn(
-                "SQLALCHEMY_TRACK_MODIFICATIONS is removed in Flask-SQLAlchemy 3.x. "
-                "Remove this key from your config.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            continue  # drop from new config
-
-        new_config[key] = value
-
-    return new_config
-
-
-def _migrate_db_uri(uri: str) -> str:
-    """
-    SQLAlchemy 2.0 removed support for the 'postgres://' dialect prefix.
-    It must be 'postgresql://'.  Also warns about sqlite relative paths.
-    """
-    if isinstance(uri, str) and uri.startswith("postgres://"):
-        warnings.warn(
-            "Database URI uses deprecated 'postgres://' scheme. "
-            "SQLAlchemy 2.0 requires 'postgresql://'. Updating automatically.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        uri = "postgresql://" + uri[len("postgres://"):]
-
-    # TODO: If using MySQL, ensure the dialect is 'mysql+pymysql://' or
-    # 'mysql+mysqlconnector://' as the default MySQLdb dialect may not be
-    # available on Python 3.12+.
-
-    return uri
-
-
-def migrate_sqlalchemy_config(old_config: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Transforms SQLAlchemy 1.3 engine/session config kwargs to 2.0 equivalents.
-
-    Handles:
-    - Removed: convert_unicode (always True in 2.0)
-    - Removed: encoding
-    - Changed: execution_options placement
-    """
-    new_config: Dict[str, Any] = {}
-
-    _removed_engine_keys = {"convert_unicode", "encoding"}
-
-    for key, value in old_config.items():
-        if key in _removed_engine_keys:
-            # TODO: Remove these keys from your create_engine() calls.
-            # Breaking change: https://docs.sqlalchemy.org/en/20/changelog/migration_20.html
-            warnings.warn(
-                f"create_engine() argument '{key}' is removed in SQLAlchemy 2.0. "
-                "Remove it from your engine configuration.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            continue
-
-        new_config[key] = value
-
-    return new_config
-
-
-# ---------------------------------------------------------------------------
-# Environment-based secrets helper
-# ---------------------------------------------------------------------------
-
-def load_secrets_from_env(required_keys: Optional[list] = None) -> Dict[str, str]:
-    """
-    Loads application secrets from environment variables.
-
-    Replaces hardcoded credentials in config files.
-
-    TODO: Ensure the following variables are set in your deployment environment
-    (or a .env file loaded via python-dotenv — add `python-dotenv` to requirements):
-        SECRET_KEY          - Flask secret key
-        DATABASE_URL        - Primary database connection string
-        Any other secrets previously hardcoded in config.py or settings.py
-
-    Returns a dict of resolved secret values.
-    """
-    defaults = required_keys or ["SECRET_KEY", "DATABASE_URL"]
-    secrets: Dict[str, str] = {}
-    missing = []
-
-    for key in defaults:
-        val = os.environ.get(key)
-        if val:
-            secrets[key] = val
-        else:
-            missing.append(key)
-
-    if missing:
-        warnings.warn(
-            f"The following required environment variables are not set: {missing}. "
-            "Set them before running the application in production.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-
-    return secrets
-
-
-# ---------------------------------------------------------------------------
-# Flask-SQLAlchemy shim  (Flask-SQLAlchemy 2.x -> 3.x)
-# ---------------------------------------------------------------------------
-
-try:
-    import flask_sqlalchemy as _fsa
-
-    _fsa_version = tuple(
-        int(x) for x in _fsa.__version__.split(".")[:2]
-        if x.isdigit()
-    )
-
-    if _fsa_version < (3, 0):
-        warnings.warn(
-            f"Flask-SQLAlchemy {_fsa.__version__} detected. "
-            "Flask-SQLAlchemy 3.x is required for SQLAlchemy 2.0 compatibility. "
-            "Run: pip install 'Flask-SQLAlchemy>=3.0'",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-    # TODO: Flask-SQLAlchemy 3.x removed Model.query (the legacy scoped query interface).
-    # Replace Model.query.filter_by(...).all() with:
-    #   from sqlalchemy import select
-    #   db.session.execute(select(Model).filter_by(...)).scalars().all()
-    # Breaking change: https://flask-sqlalchemy.palletsprojects.com/en/3.0.x/changes/
-
-    # TODO: Flask-SQLAlchemy 3.x removed db.get_or_404() signature change —
-    # verify all get_or_404() / first_or_404() / one_or_404() call sites.
-
-except ImportError:
-    pass  # Flask-SQLAlchemy not installed; skip
-
-# ---------------------------------------------------------------------------
-# Deprecation shim: werkzeug imports that moved between Flask versions
-# ---------------------------------------------------------------------------
-
-try:
-    # Werkzeug 2.x+ moved several utilities; Flask 3.x requires Werkzeug 3.x
-    from werkzeug.urls import url_quote as _wz_url_quote  # type: ignore[attr-defined]
-    warnings.warn(
-        "werkzeug.urls.url_quote is removed in Werkzeug 3.x. "
-        "Use urllib.parse.quote instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    from urllib.parse import quote as url_quote  # noqa: F401  re-export
-except ImportError:
-    try:
-        from urllib.parse import quote as url_quote  # noqa: F401  re-export
-    except ImportError:
-        pass
-
-try:
-    from werkzeug.urls import url_encode as _wz_url_encode  # type: ignore[attr-defined]
-    warnings.warn(
-        "werkzeug.urls.url_encode is removed in Werkzeug 3.x. "
-        "Use urllib.parse.urlencode instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    from urllib.parse import urlencode as url_encode  # noqa: F401  re-export
-except ImportError:
-    try:
-        from urllib.parse import urlencode as url_encode  # noqa: F401  re-export
-    except ImportError:
-        pass
-
-# ---------------------------------------------------------------------------
-# Python 3.8 -> 3.12 compatibility notes
-# ---------------------------------------------------------------------------
-
-# TODO: Review usage of the following Python 3.8 -> 3.12 breaking changes:
-#
-# 1. distutils is removed in Python 3.12.
-#    Replace `from distutils.version import LooseVersion` with `packaging.version`.
-#    Add `packaging` to requirements.txt if not present.
-#
-# 2. asyncio.coroutine decorator removed in 3.11 (deprecated since 3.8).
-#    Replace with `async def`.
-#
-# 3. unittest.TestCase.assertEquals (and similar aliases) removed in 3.12.
-#    Use assertEqual, assertTrue, etc.
-#
-# 4. imp module removed in 3.12.  Use importlib instead.
-#
-# 5. datetime.datetime.utcnow() deprecated in 3.12.
-#    Use datetime.datetime.now(datetime.timezone.utc) instead.
-#
-# 6. typing.* aliases (List, Dict, Tuple, etc.) deprecated in 3.9+.
-#    Use built-in generics: list[str], dict[str, int], tuple[int, ...].
-#    Still functional in 3.12 but emit DeprecationWarning in some contexts.
-
-# ---------------------------------------------------------------------------
-# Self-test / migration report (run this file directly)
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("Migration Shim — Compatibility Report")
-    print("=" * 60)
-
-    print(f"\nPython version : {sys.version}")
-
     try:
         import flask
-        print(f"Flask version  : {flask.__version__}")
-    except ImportError:
-        print("Flask          : NOT INSTALLED")
+    except ImportError as exc:
+        raise ImportError("Flask is not installed. Run: pip install flask>=3.1") from exc
 
+    app = flask.Flask(__name__)
+
+    if config_object is not None:
+        app.config.from_object(config_object)
+
+    # TODO: Register blueprints here after converting route modules to blueprints.
+    # TODO: Initialise extensions (SQLAlchemy, LoginManager, etc.) via init_app().
+
+    return app
+
+
+# ---------------------------------------------------------------------------
+# 1b. Deprecated Flask globals / helpers
+#     flask.json.jsonify, flask.escape, flask.Markup were moved or removed.
+# ---------------------------------------------------------------------------
+
+def _patch_flask_deprecated_globals() -> None:
+    """
+    Re-export symbols that were removed from the top-level ``flask`` namespace
+    in Flask 2.x/3.x back onto the module so that existing ``from flask import X``
+    statements continue to work during the transition period.
+
+    Affected symbols:
+      - flask.escape        → markupsafe.escape
+      - flask.Markup        → markupsafe.Markup
+      - flask._app_ctx_err_msg (removed)
+    """
     try:
-        import sqlalchemy
-        print(f"SQLAlchemy     : {sqlalchemy.__version__}")
+        import flask
+        import markupsafe
     except ImportError:
-        print("SQLAlchemy     : NOT INSTALLED")
+        return
 
+    if not hasattr(flask, "escape"):
+        flask.escape = markupsafe.escape  # type: ignore[attr-defined]
+        logger.debug("Shim applied: flask.escape -> markupsafe.escape")
+
+    if not hasattr(flask, "Markup"):
+        flask.Markup = markupsafe.Markup  # type: ignore[attr-defined]
+        logger.debug("Shim applied: flask.Markup -> markupsafe.Markup")
+
+    # TODO: Replace all ``flask.escape`` / ``flask.Markup`` usages in source
+    # files with ``markupsafe.escape`` / ``markupsafe.Markup`` directly.
+    # Flask 3.x breaking change: these aliases are permanently removed.
+
+
+# ---------------------------------------------------------------------------
+# 1c. flask.ext.* import shim (Flask 0.x/1.x extension namespace)
+#     Extensions were accessed as flask.ext.sqlalchemy, etc.
+# ---------------------------------------------------------------------------
+
+class _FlaskExtShim(types.ModuleType):
+    """
+    Proxy module that redirects ``flask.ext.<name>`` imports to
+    ``flask_<name>`` (the modern package naming convention).
+
+    TODO: Replace every ``from flask.ext import <name>`` or
+    ``import flask.ext.<name>`` in the codebase with
+    ``import flask_<name>`` directly.
+    Flask 1.x breaking change: flask.ext namespace was removed in Flask 1.0.
+    """
+
+    def __getattr__(self, name: str) -> types.ModuleType:
+        new_name = f"flask_{name}"
+        warnings.warn(
+            f"flask.ext.{name} is removed. Use '{new_name}' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return importlib.import_module(new_name)
+
+
+def _patch_flask_ext_namespace() -> None:
     try:
-        import flask_sqlalchemy
-        print(f"Flask-SQLAlchemy: {flask_sqlalchemy.__version__}")
+        import flask
     except ImportError:
-        print("Flask-SQLAlchemy: NOT INSTALLED")
+        return
 
+    ext_module = _FlaskExtShim("flask.ext")
+    sys.modules["flask.ext"] = ext_module
+    flask.ext = ext_module  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# 1d. Request / Response API changes
+# ---------------------------------------------------------------------------
+
+def shim_flask_request_environ(request: Any) -> Dict[str, Any]:
+    """
+    In Flask 3.x, ``request.environ`` access patterns are unchanged, but
+    ``request.is_json`` and ``request.get_json()`` behaviour changed for
+    silent error handling.
+
+    This helper wraps ``get_json`` with the old default (silent=False).
+
+    TODO: Audit all ``request.get_json()`` call sites. Flask 3.x breaking
+    change: the default for ``force`` and ``silent`` parameters changed.
+    Pass keyword arguments explicitly.
+    """
+    # Old behaviour: raises 400 on bad JSON by default
+    return request.get_json(force=False, silent=False)  # type: ignore[no-any-return]
+
+
+# ---------------------------------------------------------------------------
+# 1e. before_first_request removal
+#     Flask 3.x removed @app.before_first_request.
+# ---------------------------------------------------------------------------
+
+_before_first_request_ran: bool = False
+
+
+def before_first_request_shim(app: Any, func: Callable) -> None:
+    """
+    Emulates the removed ``@app.before_first_request`` decorator using
+    ``@app.before_request``.
+
+    Usage::
+
+        from migration_shim import before_first_request_shim
+        before_first_request_shim(app, my_setup_function)
+
+    TODO: Replace all ``@app.before_first_request`` decorators in the
+    codebase with this helper or with explicit initialisation inside the
+    application factory.
+    Flask 3.x breaking change: @app.before_first_request was removed.
+    """
+    global _before_first_request_ran
+
+    @app.before_request
+    def _wrapper() -> None:
+        global _before_first_request_ran
+        if not _before_first_request_ran:
+            _before_first_request_ran = True
+            func()
+
+
+# ===========================================================================
+# SECTION 2 — SQLAlchemy 1.3 → 2.0 compatibility shims
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 2a. Legacy Query API shim
+#     SQLAlchemy 2.0 removes Session.query() in favour of select().
+# ---------------------------------------------------------------------------
+
+def legacy_query(session: Any, model_class: Any) -> Any:
+    """
+    Compatibility wrapper that translates the SQLAlchemy 1.3 ``session.query(Model)``
+    pattern to the SQLAlchemy 2.0 ``select(Model)`` pattern.
+
+    Returns a ``Select`` statement; call ``session.execute(...).scalars()`` on it.
+
+    Usage::
+
+        stmt = legacy_query(db.session, User)
+        results = db.session.execute(stmt).scalars().all()
+
+    TODO: Replace all ``session.query(Model).filter(...).all()`` call sites
+    with ``session.execute(select(Model).where(...)).scalars().all()``.
+    SQLAlchemy 2.0 breaking change: Query API is removed.
+    """
     try:
-        import werkzeug
-        print(f"Werkzeug       : {werkzeug.__version__}")
+        from sqlalchemy import select
+    except ImportError as exc:
+        raise ImportError(
+            "SQLAlchemy is not installed. Run: pip install sqlalchemy>=2.0"
+        ) from exc
+
+    return select(model_class)
+
+
+def query_filter_shim(session: Any, model_class: Any, *criterion: Any) -> Any:
+    """
+    Wraps the common ``session.query(Model).filter(*criterion)`` pattern.
+
+    Returns a ``Select`` statement with WHERE clauses applied.
+
+    TODO: Inline the ``select(Model).where(...)`` pattern directly at each
+    call site for clarity. This shim is a temporary bridge only.
+    SQLAlchemy 2.0 breaking change: Query.filter() is removed.
+    """
+    try:
+        from sqlalchemy import select
+    except ImportError as exc:
+        raise ImportError("SQLAlchemy >= 2.0 required") from exc
+
+    stmt = select(model_class)
+    if criterion:
+        stmt = stmt.where(*criterion)
+    return stmt
+
+
+def execute_query(session: Any, stmt: Any) -> list:
+    """
+    Execute a SQLAlchemy 2.0 ``select()`` statement and return a list of
+    model instances, mirroring the old ``.all()`` behaviour.
+
+    TODO: Replace direct ``.all()`` calls on Query objects with this helper
+    or with ``session.execute(stmt).scalars().all()`` inline.
+    SQLAlchemy 2.0 breaking change: Query.all() is removed.
+    """
+    return session.execute(stmt).scalars().all()
+
+
+# ---------------------------------------------------------------------------
+# 2b. Column type renames
+# ---------------------------------------------------------------------------
+
+def get_sqlalchemy_types() -> types.ModuleType:
+    """
+    Returns a namespace object exposing both old and new SQLAlchemy type names.
+
+    SQLAlchemy 2.0 breaking changes:
+      - ``sqlalchemy.orm.declarative_base()`` replaces
+        ``sqlalchemy.ext.declarative.declarative_base()``
+      - ``sqlalchemy.orm.DeclarativeBase`` (class-based) is the new preferred API.
+
+    TODO: Replace ``from sqlalchemy.ext.declarative import declarative_base``
+    with ``from sqlalchemy.orm import declarative_base`` (2.0 transitional) or
+    subclass ``sqlalchemy.orm.DeclarativeBase`` (2.0 native style).
+    """
+    try:
+        import sqlalchemy.orm as orm
+    except ImportError as exc:
+        raise ImportError("SQLAlchemy >= 2.0 required") from exc
+
+    # Provide the old import path as an alias
+    try:
+        from sqlalchemy.ext.declarative import declarative_base as _old_base  # noqa: F401
     except ImportError:
-        print("Werkzeug       : NOT INSTALLED")
+        # Already removed in this SQLAlchemy version; patch it back
+        import sqlalchemy.ext.declarative as _ext_decl  # type: ignore[import]
+        _ext_decl.declarative_base = orm.declarative_base  # type: ignore[attr-defined]
+        logger.debug(
+            "Shim applied: sqlalchemy.ext.declarative.declarative_base "
+            "-> sqlalchemy.orm.declarative_base"
+        )
 
-    print("\n--- Config migration smoke test ---")
-    sample_old_config: Dict[str, Any] = {
-        "SECRET_KEY": "hardcoded-secret",
-        "DATABASE_URI": "postgres://user:pass@localhost/mydb",
-        "SQLALCHEMY_TRACK_MODIFICATIONS": True,
-        "JSON_AS_ASCII": True,
-        "JSON_SORT_KEYS": True,
-        "DEBUG": True,
-    }
-    print("Old config:", sample_old_config)
-    new_cfg = migrate_flask_config(sample_old_config)
-    print("New config:", new_cfg)
+    return orm
 
-    print("\n--- SQLAlchemy engine config migration ---")
-    old_engine_cfg: Dict[str, Any] = {
-        "convert_unicode": True,
-        "encoding": "utf-8",
-        "pool_size": 5,
-        "echo": False,
-    }
-    print("Old engine config:", old_engine_cfg)
-    new_engine_cfg = migrate_sqlalchemy_config(old_engine_cfg)
-    print("New engine config:", new_engine_cfg)
 
-    print("\n--- Secrets from environment ---")
-    secrets = load_secrets_from_env(["SECRET_KEY", "DATABASE_URL"])
-    print("Resolved secrets keys:", list(secrets.keys()))
+# ---------------------------------------------------------------------------
+# 2c. Session / engine creation changes
+# ---------------------------------------------------------------------------
 
-    print("\nDone. Review all TODO comments in migration_shim.py for manual steps.")
+def create_engine_shim(url: str, **kwargs: Any) -> Any:
+    """
+    Wraps ``sqlalchemy.create_engine`` to enforce 2.0-compatible defaults:
+      - ``future=True`` is the default in 2.0 (parameter removed; always on).
+      - Removes the deprecated ``convert_unicode`` parameter.
+
+    TODO: Remove ``future=True`` from any existing ``create_engine()`` calls
+    (it is now the default and passing it raises a warning in 2.0).
+    SQLAlchemy 2.0 breaking change: ``future`` parameter removed.
+    """
+    try:
+        from sqlalchemy import create_engine
+    except ImportError as exc:
+        raise ImportError("SQLAlchemy >= 2.0 required") from exc
+
+    # Strip deprecated kwargs silently during migration
+    kwargs.pop("future", None)  # future=True is now the only mode
+    kwargs.pop("convert_unicode", None)  # removed in 2.0
+
+    # TODO: Audit connection pool settings — pool_pre_ping=True is now
+    # recommended for all production deployments.
+    kwargs.setdefault("pool_pre_ping", True)
+
+    return create_engine(url, **kwargs)
+
+
+def get_session_factory(engine: Any) -> Any:
+    """
+    Returns a ``sessionmaker`` bound to the provided engine using 2.0 conventions.
+
+    TODO: Replace ``scoped_session(sessionmaker(...))`` patterns with
+    ``async_sessionmaker`` if migrating to async, or keep synchronous
+    ``sessionmaker`` with ``autobegin=True`` (the new default).
+    SQLAlchemy 2.0 breaking change: autocommit mode removed from Session.
+    """
+    try:
+        from sqlalchemy.orm import sessionmaker
+    except ImportError as exc:
+        raise ImportError("SQLAlchemy >= 2.0 required") from exc
+
+    # autocommit=True is removed in 2.0; use explicit transaction management
+    # TODO: Audit all session.commit() / session.rollback() call sites to
+    # ensure explicit transaction boundaries are set.
+    return sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+# ---------------------------------------------------------------------------
+# 2d. Relationship loading — lazy="dynamic" removed in 2.0
+# ---------------------------------------------------------------------------
+
+def warn_dynamic_relationships() -> None:
+    """
+    Emits a warning about ``lazy='dynamic'`` relationships which are removed
+    in SQLAlchemy 2.0.
+
+    TODO: Replace all ``relationship(..., lazy='dynamic')`` definitions with
+    ``lazy='select'`` (default) or use ``write_only=True`` for large
+    collections.
+    SQLAlchemy 2.0 breaking change: lazy='dynamic' is removed.
+    """
+    warnings.warn(
+        "lazy='dynamic' relationships are removed in SQLAlchemy 2.0. "
+        "Replace with lazy='select' or write_only=True.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+
+# ===========================================================================
+# SECTION 3 — Environment-based secrets management shim
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 3a. Hardcoded credential detection and replacement helpers
+# ---------------------------------------------------------------------------
+
+_SENSITIVE_KEYS = frozenset({
+    "SECRET_KEY",
+    "DATABASE_URL",
+    "DB_PASSWORD",
+    "DB_USER",
+    "DB_HOST",
+    "SQLALCHEMY_DATABASE_URI",
+    "PASSWORD",
+    "API_KEY",
+    "JWT_SECRET",
+})
+
+
+def get_secret(key: str, default: Optional[str] = None) -> str:
+    """
+    Retrieves a configuration secret from environment variables.
+
+    Replaces hardcoded credential patterns such as::
+
+        app.config['SECRET_KEY'] = 'hardcoded-value'
+
+    with::
+
+        app.config['SECRET_KEY'] = get_secret('SECRET_KEY')
+
+    TODO: Audit all ``app.config[...]`` assignments and ``os.environ.get(...)``
+    calls for hardcoded credentials. Move all secrets to a ``.env`` file
+    (excluded from version control) or a secrets manager.
+    Breaking change: hardcoded credentials must be removed before deployment.
+    """
+    value = os.environ.get(key, default)
+    if value is None:
+        raise EnvironmentError(
+            f"Required secret '{key}' is not set in the environment. "
+            f"Add it to your .env file or environment before starting the application."
+        )
+    return value
+
+
+def build_database_url() -> str:
+    """
+    Constructs a SQLAlchemy 2.0-compatible database URL from environment variables,
+    replacing any hardcoded ``SQLALCHEMY_DATABASE_URI`` values.
+
+    Expected environment variables:
+      DB_DRIVER   (e.g. postgresql+psycopg2)
+      DB_USER
+      DB_PASSWORD
+      DB_HOST
+      DB_PORT     (default: 5432)
+      DB_NAME
+
+    TODO: Set these variables in your deployment environment or .env file.
+    TODO: If using SQLite for development, set DATABASE_URL=sqlite:///dev.db
+    and bypass this function.
+    """
+    driver = os.environ.get("DB_DRIVER", "postgresql+psycopg2")
+    user = get_secret("DB_USER")
+    password = get_secret("DB_PASSWORD")
+    host = get_secret("DB_HOST", "localhost")
+    port = os.environ.get("DB_PORT", "5432")
+    name = get_secret("DB_NAME")
+    return f"{driver}://{user}:{password}@{host}:{port}/{name}"
+
+
+# ===========================================================================
+# SECTION 4 — Config format migration
+# ===========================================================================
+
+def migrate_config(old_config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Transforms a Flask 1.x / SQLAlchemy 1.3 config dictionary into a
+    Flask 3.1 / SQLAlchemy 2.0 compatible config dictionary.
+
+    Parameters
+    ----------
+    old_config : dict
+        The old configuration dictionary (e.g. loaded from config.py).
+
+    Returns
+    -------
+    dict
+        A new configuration dictionary with deprecated keys replaced.
+
+    Breaking changes addressed:
+      - SQLALCHEMY_TRACK_MODIFICATIONS default changed (must be explicit).
+      - SQLALCHEMY_DATABASE_URI should come from environment.
+      - SECRET_KEY must not be hardcoded.
+      - PROPAGATE_EXCEPTIONS behaviour changed in Flask 3.x.
+      - JSON_SORT_KEYS removed (use app.json.sort_keys).
+      - JSONIFY_PRETTYPRINT_REGULAR removed.
+      - JSONIFY_MIMETYPE removed (use app.json.mimetype).
+      - TEMPLATES_AUTO_RELOAD moved to app.jinja_env.auto_reload.
+    """
+    new_config: Dict[str, Any] = {}
+
+    for key, value in old_config.items():
+
+        # --- Removed Flask config keys ---
+        if key == "JSON_SORT_KEYS":
+            # TODO: Set app.json.sort_keys = <value> after app creation.
+            # Flask 3.x breaking change: JSON_SORT_KEYS config key removed.
+            logger.warning(
+                "Config key JSON_SORT_KEYS is removed in Flask 3.x. "
+                "Set app.json.sort_keys = %r after app creation instead.", value
+            )
+            continue
+
+        if key == "JSONIFY_PRETTYPRINT_REGULAR":
+            # TODO: Set app.json.compact = not <value> after app creation.
+            # Flask 3.x breaking change: JSONIFY_PRETTYPRINT_REGULAR removed.
+            logger.warning(
+                "Config key JSONIFY_PRETTYPRINT_REGULAR is removed in Flask 3.x. "
+                "Set app.json.compact = %r after app creation instead.", not value
+            )
+            continue
+
+        if key == "JSONIFY_MIMETYPE":
+            # TODO: Set app.json.mimetype = <value> after app creation.
+            # Flask 3.x breaking change: JSONIFY_MIMETYPE removed.
+            logger.warning(
+                "Config key JSONIFY_MIMETYPE is removed in Flask 3.x. "
+                "Set app.json.mimetype = %r after app creation instead.", value
+            )
+            continue
+
+        if key == "TEMPLATES_AUTO_RELOAD":
+            # TODO: Set app.jinja_env.auto_reload = <value> after app creation.
+            # Flask 3.x breaking change: TEMPLATES_AUTO_RELOAD removed.
+            logger.warning(
+                "Config key TEMPLATES_AUTO_RELOAD is removed in Flask 3.x. "
+                "Set app.jinja_env.auto_reload = %r after app creation instead.", value
+            )
+            continue
+
+        # --- SQLAlchemy config migration ---
+        if key == "SQLALCHEMY_DATABASE_URI":
+            env_val = os.environ.get("DATABASE_URL") or os.environ.get("SQLALCHEMY_DATABASE_URI")
+            if env_val:
+                new_config[key] = env_val
+            else:
+                # TODO: Move SQLALCHEMY_DATABASE_URI to environment variable DATABASE_URL.
+                # Breaking change: hardcoded database URIs must be replaced with env vars.
+                logger.warning(
+                    "SQLALCHEMY_DATABASE_URI is hardcoded. "
+                    "Set DATABASE_URL environment variable instead."
+                )
+                new_config[key] = value
+            continue
+
+        if key == "SQLALCHEMY_TRACK_MODIFICATIONS":
+            # SQLAlchemy 2.0 / Flask-SQLAlchemy 3.x: this must be False.
+            if value is True:
+                logger.warning(
+                    "SQLALCHEMY_TRACK_MODIFICATIONS=True causes significant overhead "
+                    "and is unsupported in SQLAlchemy 2.0. Forcing to False."
+                )
+            new_config[key] = False
+            continue
+
+        # --- Secret key migration ---
+        if key == "SECRET_KEY":
+            env_val = os.environ.get("SECRET_KEY")
+            if env_val:
+                new_config[key] = env_val
+            else:
+                # TODO: Set SECRET_KEY as an environment variable.
+                # Breaking change: hardcoded SECRET_KEY is a security vulnerability.
+                logger.warning(
+                    "SECRET_KEY is hardcoded in config. "
+                    "Set the SECRET_KEY environment variable instead."
+                )
+                new_config[key] = value
+            continue
+
+        # --- Pass-through for unrecognised keys ---
+        new_config[key] = value
+
+    # Ensure SQLALCHEMY_TRACK_MODIFICATIONS is always present and False
+    new_config.setdefault("SQLALCHEMY_TRACK_MODIFICATIONS", False)
+
+    # TODO: Add SESSION_COOKIE_SAMESITE and SESSION_COOKIE_SECURE for
+    # Flask 3.x security defaults if not already present.
+    new_config.setdefault("SESSION_COOKIE_SAMESITE", "Lax")
+    new_config.setdefault("SESSION_COOKIE_SECURE", True)
+
+    return new_config
+
+
+# ===========================================================================
+# SECTION 5 — Flask-SQLAlchemy extension shim
+# ===========================================================================
+
+def get_flask_sqlalchemy_db() -> Any:
+    """
+    Returns a Flask-SQLAlchemy ``SQLAlchemy`` instance configured for
+    SQLAlchemy 2.0 compatibility.
+
+    TODO: Ensure flask-sqlalchemy>=3.0 is installed (required for
+    SQLAlchemy 2.0 support). Run: pip install flask-sqlalchemy>=3.0
+    Flask-SQLAlchemy 3.x breaking change: db.session.query() is removed;
+    use db.session.execute(select(...)) instead.
+    """
+    try:
+        from flask_sqlalchemy import SQLAlchemy
+    except ImportError as exc:
+        raise ImportError(
+            "flask-sqlalchemy is not installed or is too old. "
+            "Run: pip install flask-sqlalchemy>=3.0"
+        ) from exc
+
+    # TODO: Pass model_class=db.Model subclassing DeclarativeBase for
+    # Flask-SQLAlchemy 3.x native style.
+    db = SQLAlchemy()
+    return db
+
+
+# ===========================================================================
+# SECTION 6 — Python 3.8 → 3.12/3.13 compatibility helpers
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# 6a. Removed / changed stdlib APIs
+# ---------------------------------------------------------------------------
+
+def shim_importlib_resources() -> None:
+    """
+    Python 3.9+ changed ``importlib.resources`` API.
+    ``importlib.resources.open_text`` and ``open_binary`` are deprecated in 3.11
+    and removed in 3.13.
+
+    TODO: Replace ``importlib.resources.open_text(package, resource)`` with
+    ``importlib.resources.files(package).joinpath(resource).open('r')``.
+    Python 3.13 breaking change: open_text / open_binary removed.
+    """
+    import importlib.resources as _ir
+
+    if not hasattr(_ir, "open_text"):
+        # Already removed; provide a shim
+        def open_text(package: str, resource: str, encoding: str = "utf-8", errors: str = "strict"):  # noqa: E501
+            return _ir.files(package).joinpath(resource).open("r", encoding=encoding, errors=errors)  # type: ignore[attr-defined]
+
+        def open_binary(package: str, resource: str):
+            return _ir.files(package).joinpath(resource).open("rb")  # type: ignore[attr-defined]
+
+        _ir.open_text = open_text  # type: ignore[attr-defined]
+        _ir.open_binary = open_binary  # type: ignore[attr-defined]
+        logger.debug("Shim applied: importlib.resources.open_text / open_binary")
+
+
+def shim_collections_abc() -> None:
+    """
+    Python 3.10+ removed ``collections.MutableMapping`` etc. (moved to
+    ``collections.abc`` in 3.3, aliases removed in 3.10).
+
+    TODO: Replace all ``collections.MutableMapping``, ``collections.Callable``,
+    etc. with ``collections.abc.MutableMapping``, ``collections.abc.Callable``.
+    Python 3.10 breaking change: direct collections aliases removed.
+    """
+    import collections
+    import collections.abc
+
+    _aliases = [
+        "Awaitable", "Coroutine", "AsyncIterable", "AsyncIterator",
+        "AsyncGenerator", "Hashable", "Iterable", "Iterator", "Generator",
+        "Reversible", "Container", "Collection", "Callable", "Set",
+        "MutableSet", "Mapping", "MutableMapping", "MappingView",
+        "KeysView", "ItemsView", "ValuesView", "Sequence", "MutableSequence",
+        "ByteString",
+    ]
+    for name in _aliases:
+        if not hasattr(collections, name) and hasattr(collections.abc, name):
+            setattr(collections, name, getattr(collections.abc, name))
+            logger.debug("Shim applied: collections.%s -> collections.abc.%s", name, name)
+
+
+# ---------------------------------------------------------------------------
+# 6b. distutils removal (Python 3.12)
+# ---------------------------------------------------------------------------
+
+def shim_distutils() -> None:
+    """
+    ``distutils`` was removed in Python 3.12.
+
+    TODO: Replace any ``from distutils.version import LooseVersion`` or
+    ``from distutils.util import strtobool`` usages with ``packaging.version``
+    and a manual boolean parser respectively.
+    Python 3.12 breaking change: distutils module removed.
+    """
+    try:
+        import distutils  # noqa: F401
+    except ImportError:
+        # Provide minimal shims for the most common distutils usages
+        _distutils = types.ModuleType("distutils")
+        _distutils_version = types.ModuleType("distutils.version")
+        _distutils_util = types.ModuleType("distutils.util")
+
+        try:
+            from packaging.version import Version as _PkgVersion
+
+            class LooseVersion:  # type: ignore[no-redef]
+                def __init__(self, vstring: str) -> None:
+                    self.vstring = vstring
+                    self._v = _PkgVersion(vstring)
+
+                def __str__(self) -> str:
+                    return self.vstring
+
+                def __lt__(self, other: "LooseVersion") -> bool:
+                    return self._v < other._v
+
+                def __le__(self, other: "LooseVersion") -> bool:
+                    return self._v <= other._v
+
+                def __eq__(self, other: object) -> bool:
+                    if isinstance(other, LooseVersion):
+                        return self._v == other._v
+                    return NotImplemented
+
+                def __ge__(self, other: "LooseVersion") -> bool:
+                    return self._v >= other._v
+
+                def __gt__(self, other: "LooseVersion") -> bool:
+                    return self._v > other._v
+
+            _distutils_version.LooseVersion = LooseVersion  # type: ignore[attr-defined]
+        except ImportError:
+            # TODO: Install packaging: pip install packaging
+            pass
+
+        def strtobool(val: str) -> int:
+            val = val.lower()
+            if val in ("y", "yes", "t", "true", "on", "1"):
+                return 1
+            if val in ("n", "no", "f", "false", "off", "0"):
+                return 0
+            raise ValueError(f"invalid truth value {val!r}")
+
+        _distutils_util.strtobool = strtobool  # type: ignore[attr-defined]
+
+        sys.modules["distutils"] = _distutils
+        sys.modules["distutils.version"] = _distutils_version
+        sys.modules["distutils.util"] = _distutils_util
+        logger.debug("Shim applied: distutils (removed in Python 3.12)")
+
+
+# ===========================================================================
+# SECTION 7 — Apply all shims
+# ===========================================================================
+
+def apply_all_shims() -> None:
+    """
+    Apply all compatibility shims in the correct order.
+
+    Call this function as early as possible in your application entry point,
+    before any other imports::
+
+        import migration_shim
+        migration_shim.apply_all_shims()
+
+        from myapp import create_app
+        app = create_app()
+    """
+    shim_distutils()
+    shim_collections_abc()
+    shim_importlib_resources()
+    _patch_flask_deprecated_globals()
+    _patch_flask_ext_namespace()
+    get_sqlalchemy_types()
+    logger.info("migration_shim: all compatibility shims applied.")
+
+
+# ===========================================================================
+# SECTION 8 — CLI: config file migration
+# ===========================================================================
+
+def _migrate_config_file(input_path: str, output_path: str) -> None:
+    """
+    Reads a Python config file (as a dict literal or module), applies
+    ``migrate_config()``, and writes the result to ``output_path``.
+
+    TODO: Review the generated output file manually before using it in
+    production. Automated migration cannot handle all edge cases.
+    """
+    import ast
+
+    with open(input_path, "r", encoding="utf-8") as fh:
+        source = fh.read()
+
+    # Attempt to parse as a simple dict assignment: CONFIG = { ... }
+    old_config: Dict[str, Any] = {}
+    try:
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id.upper() in (
+                        "CONFIG", "APP_CONFIG", "SETTINGS"
+                    ):
+                        old_config = ast.literal_eval(node.value)
+                        break
+    except Exception as exc:
+        logger.warning("Could not parse config file as AST: %s. Attempting exec().", exc)
+        _ns: Dict[str, Any] = {}
+        exec(compile(source, input_path, "exec"), _ns)  # noqa: S102
+        old_config = {
+            k: v for k, v in _ns.items()
+            if not k.startswith("_") and isinstance(v, (str, int, float, bool, type(None)))
+        }
+
+    new_config = migrate_config(old_config)
+
+    with open(output_path, "w", encoding="utf-8") as fh:
+        fh.write("# Auto-generated by migration_shim.py — review before use\n")
+        fh.write("# TODO: Verify all values and remove this file once migration is complete.\n\n")
+        fh.write("import os\n\n")
+        fh.write("CONFIG = {\n")
+        for k, v in new_config.items():
+            fh.write(f"    {k!r}: {v!r},\n")
+        fh.write("}\n")
+
+    print(f"Migrated config written to: {output_path}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    parser = argparse.ArgumentParser(
+        description="Migration helper for Flask 1.x→3.1 / SQLAlchemy 1.3→2.0 upgrade."
+    )
+    parser.add_argument(
+        "--migrate-config",
+        metavar="INPUT",
+        help="Path to old config.py to migrate.",
+    )
+    parser.add_argument(
+        "--output",
+        metavar="OUTPUT",
+        default="config_migrated.py",
+        help="Output path for migrated config (default: config_migrated.py).",
+    )
+    parser.add_argument(
+        "--apply-shims",
+        action="store_true",
+        help="Apply all runtime shims and report what was patched.",
+    )
+
+    args = parser.parse_args()
+
+    if args.apply_shims:
+        apply_all_shims()
+
+    if args.migrate_config:
+        _migrate_config_file(args.migrate_config, args.output)
+
+    if not args.migrate_config and not args.apply_shims:
+        parser.print_help()
