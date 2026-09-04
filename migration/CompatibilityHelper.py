@@ -1,851 +1,772 @@
 # migration_shim.py
-# Compatibility shim for Flask 1.x → 3.1, SQLAlchemy 1.3 → 2.0 upgrade
-# and /health + /ready endpoint additions.
+# Compatibility shim for the Flask 1.x → 3.1, SQLAlchemy 1.3 → 2.0 upgrade,
+# plus /health and /ready endpoint additions.
 #
 # Usage:
 #   python migration_shim.py
 #
 # This script:
-#   1. Provides deprecated Flask API replacements (Flask 1.x → 3.x)
-#   2. Provides SQLAlchemy 1.3 → 2.0 query API shims
-#   3. Provides a config migration function (old format → new format)
-#   4. Registers /api/health and /api/ready blueprints on an existing Flask app
-#   5. Marks every location requiring manual intervention with a TODO comment
+#   1. Provides deprecated-API replacement wrappers for Flask 1.x patterns.
+#   2. Provides import shims / re-export aliases for renamed packages/classes.
+#   3. Provides a config migration function (old format → new format).
+#   4. Registers /api/health and /api/ready blueprints on any Flask app instance.
+#   5. Emits TODO comments wherever manual intervention is still required.
 
 from __future__ import annotations
 
 import datetime
+import importlib
 import os
+import sys
 import warnings
 from typing import Any, Callable, Dict, Optional
 
 # ---------------------------------------------------------------------------
-# Dependency availability guards
+# 0.  Python version guard
 # ---------------------------------------------------------------------------
+# TODO: The upgrade goal targets Python 3.12 or 3.13 (current runtime is 3.8).
+#       This shim is written to be compatible with 3.8+ so it can run during the
+#       transition, but you MUST update your Dockerfile / CI matrix to use
+#       python:3.12-slim (or 3.13-slim) before going to production.
+if sys.version_info < (3, 8):
+    raise RuntimeError("Python 3.8 or newer is required to run this shim.")
+
+# ---------------------------------------------------------------------------
+# 1.  Flask import shim  (Flask 1.x → 3.1)
+# ---------------------------------------------------------------------------
+# Flask 3.x removed several top-level helpers that existed in Flask 1.x.
+# The shim below re-exports them from their new locations so that existing
+# call-sites continue to work without immediate code changes.
 
 try:
-    import flask
+    import flask as _flask
     from flask import Flask, Blueprint, jsonify, request, g
-    import flask.globals  # noqa: F401
-    _FLASK_AVAILABLE = True
-    _FLASK_VERSION = tuple(int(x) for x in flask.__version__.split(".")[:2])
+except ImportError as exc:  # pragma: no cover
+    raise ImportError(
+        "Flask is not installed. Run: pip install 'flask>=3.1,<4'."
+    ) from exc
+
+# -- 1a. flask.json.jsonify was not moved but flask.json module was refactored.
+#        Provide a safe re-export so `from migration_shim import jsonify` works.
+try:
+    from flask import jsonify as _jsonify  # noqa: F401 – re-exported below
 except ImportError:  # pragma: no cover
-    _FLASK_AVAILABLE = False
-    _FLASK_VERSION = (0, 0)
+    # TODO: If jsonify is missing from your Flask 3.x install, verify the
+    #       installed version with `pip show flask`.
+    raise
+
+# -- 1b. flask.escape was removed in Flask 2.x (moved to markupsafe).
+#        Provide a shim so old `from flask import escape` call-sites work.
+try:
+    from flask import escape as flask_escape  # type: ignore[attr-defined]
+except ImportError:
+    try:
+        from markupsafe import escape as flask_escape  # type: ignore[assignment]
+    except ImportError:
+        # TODO: Install markupsafe: pip install markupsafe
+        flask_escape = None  # type: ignore[assignment]
+
+# -- 1c. flask.Markup was removed in Flask 2.x (moved to markupsafe).
+try:
+    from flask import Markup as FlaskMarkup  # type: ignore[attr-defined]
+except ImportError:
+    try:
+        from markupsafe import Markup as FlaskMarkup  # type: ignore[assignment]
+    except ImportError:
+        # TODO: Install markupsafe: pip install markupsafe
+        FlaskMarkup = None  # type: ignore[assignment]
+
+# -- 1d. flask.signals (blinker) — blinker is now a hard dependency in Flask 2+.
+#        Old code that guarded `signals_available` must be updated.
+# TODO: Remove any `try/except ImportError` guards around blinker/signals in
+#       your codebase. In Flask 3.x, blinker is always present.
+
+# -- 1e. Application factory pattern.
+#        Flask 1.x apps often called app.run() at module level.
+#        Flask 3.x strongly recommends the application factory pattern.
+# TODO: Refactor any module-level `app = Flask(__name__)` + `app.run()` blocks
+#       into a `create_app()` factory function.  See `create_flask_app()` below
+#       for a reference implementation.
+
+# -- 1f. before_first_request was removed in Flask 2.3.
+# TODO: Replace any @app.before_first_request decorators with an explicit
+#       with app.app_context(): block inside your create_app() factory, or use
+#       the app.cli.with_appcontext() decorator for CLI commands.
+
+# -- 1g. flask.ext.* namespace was removed long ago; raise a clear error.
+class _FlaskExtShim:
+    """Raises a helpful error when legacy flask.ext.* imports are attempted."""
+
+    def __getattr__(self, name: str) -> Any:
+        raise ImportError(
+            f"flask.ext.{name} is not available in Flask 3.x. "
+            "Install the extension directly and import from its own package. "
+            # TODO: Replace `from flask.ext.<name> import ...` with the
+            #       extension's own import path (e.g. `from flask_<name> import ...`).
+        )
+
+
+# Patch sys.modules so `import flask.ext` gives a useful error.
+sys.modules.setdefault("flask.ext", _FlaskExtShim())  # type: ignore[arg-type]
+
+# ---------------------------------------------------------------------------
+# 2.  SQLAlchemy import shim  (1.3 → 2.0)
+# ---------------------------------------------------------------------------
+# SQLAlchemy 2.0 removed the legacy Query API and changed several import paths.
 
 try:
-    import sqlalchemy
-    from sqlalchemy import text, select
-    import sqlalchemy.orm
-    _SA_AVAILABLE = True
-    _SA_VERSION = tuple(int(x) for x in sqlalchemy.__version__.split(".")[:2])
-except ImportError:  # pragma: no cover
-    _SA_AVAILABLE = False
-    _SA_VERSION = (0, 0)
+    import sqlalchemy as sa
+    from sqlalchemy import text, select, insert, update, delete
+    from sqlalchemy.orm import Session, DeclarativeBase, mapped_column, Mapped
+except ImportError as exc:  # pragma: no cover
+    raise ImportError(
+        "SQLAlchemy is not installed. Run: pip install 'sqlalchemy>=2.0,<3'."
+    ) from exc
+
+# -- 2a. declarative_base() was soft-deprecated in 2.0; DeclarativeBase is preferred.
+#        Provide a shim so old `Base = declarative_base()` call-sites keep working.
+try:
+    from sqlalchemy.orm import declarative_base as _declarative_base  # 2.0 compat shim
+except ImportError:
+    # In SQLAlchemy 2.0 the function still exists but emits a deprecation warning.
+    # TODO: Replace `Base = declarative_base()` with:
+    #
+    #   class Base(DeclarativeBase):
+    #       pass
+    #
+    # This is the canonical SQLAlchemy 2.0 pattern.
+    _declarative_base = None  # type: ignore[assignment]
 
 
-# ===========================================================================
-# SECTION 1 — Flask 1.x → 3.x deprecated API replacements
-# ===========================================================================
-
-class FlaskCompatShim:
+def declarative_base(*args: Any, **kwargs: Any) -> Any:
     """
-    Wraps a Flask 3.x application and re-exposes Flask 1.x APIs that were
-    removed or changed in Flask 2.x / 3.x.
+    Shim for the legacy ``sqlalchemy.orm.declarative_base()`` call.
 
-    Breaking changes addressed:
-      - flask.json.jsonify / flask.json.dumps signature changes
-      - before_first_request removed in Flask 2.3 (Flask 3.x: fully removed)
-      - flask.escape moved to markupsafe.escape
-      - flask.Markup moved to markupsafe.Markup
-      - flask._app_ctx_stack / flask._request_ctx_stack removed
-      - send_file / send_from_directory: attachment_filename → download_name
-      - PROPAGATE_EXCEPTIONS default changed
-      - JSON_SORT_KEYS / JSONIFY_PRETTYPRINT_REGULAR config keys removed
+    Delegates to the real function while emitting a deprecation warning so
+    developers know to migrate to the ``DeclarativeBase`` class pattern.
     """
-
-    def __init__(self, app: "Flask") -> None:
-        if not _FLASK_AVAILABLE:
-            raise RuntimeError("Flask is not installed.")
-        self.app = app
-        self._before_first_request_funcs: list[Callable] = []
-        self._first_request_done = False
-        self._patch_before_first_request()
-
-    # ------------------------------------------------------------------
-    # before_first_request shim
-    # Flask 2.3 deprecated before_first_request; Flask 3.x removed it.
-    # Replacement: use a with app.app_context() block at startup, or an
-    # explicit flag checked in a before_request hook (implemented below).
-    # ------------------------------------------------------------------
-
-    def _patch_before_first_request(self) -> None:
-        """
-        Registers a before_request hook that fires registered callables
-        exactly once, emulating the removed before_first_request decorator.
-        """
-        shim = self
-
-        @self.app.before_request
-        def _run_before_first_request_funcs() -> None:
-            if not shim._first_request_done:
-                shim._first_request_done = True
-                for fn in shim._before_first_request_funcs:
-                    fn()
-
-    def before_first_request(self, fn: Callable) -> Callable:
-        """
-        Drop-in replacement for the removed @app.before_first_request decorator.
-
-        Usage (old Flask 1.x code):
-            @app.before_first_request
-            def startup():
-                ...
-
-        Usage with this shim:
-            shim = FlaskCompatShim(app)
-
-            @shim.before_first_request
-            def startup():
-                ...
-        """
-        warnings.warn(
-            "before_first_request was removed in Flask 3.x. "
-            "This shim emulates it via a before_request hook. "
-            "Migrate to app startup code or an explicit flag.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self._before_first_request_funcs.append(fn)
-        return fn
-
-    # ------------------------------------------------------------------
-    # flask.escape / flask.Markup shim
-    # Moved to markupsafe in Flask 2.x; import alias provided here.
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def get_escape() -> Callable:
-        """
-        Returns markupsafe.escape, replacing the removed flask.escape.
-
-        Old code:  from flask import escape
-        New code:  from markupsafe import escape
-        """
-        try:
-            from markupsafe import escape  # type: ignore[import]
-            return escape
-        except ImportError as exc:  # pragma: no cover
-            raise ImportError(
-                "markupsafe is required. Install it with: pip install markupsafe"
-            ) from exc
-
-    @staticmethod
-    def get_markup() -> type:
-        """
-        Returns markupsafe.Markup, replacing the removed flask.Markup.
-
-        Old code:  from flask import Markup
-        New code:  from markupsafe import Markup
-        """
-        try:
-            from markupsafe import Markup  # type: ignore[import]
-            return Markup
-        except ImportError as exc:  # pragma: no cover
-            raise ImportError(
-                "markupsafe is required. Install it with: pip install markupsafe"
-            ) from exc
-
-    # ------------------------------------------------------------------
-    # send_file / send_from_directory: attachment_filename → download_name
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def send_file_compat(path_or_file: Any, **kwargs: Any) -> Any:
-        """
-        Wraps flask.send_file, translating the removed `attachment_filename`
-        kwarg to `download_name` (Flask 2.0+).
-
-        Old code:  send_file(path, attachment_filename="report.pdf")
-        New code:  send_file(path, download_name="report.pdf")
-        """
-        from flask import send_file  # type: ignore[import]
-
-        if "attachment_filename" in kwargs:
-            warnings.warn(
-                "send_file(attachment_filename=...) was removed in Flask 2.0. "
-                "Use download_name= instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            kwargs["download_name"] = kwargs.pop("attachment_filename")
-
-        # TODO: If you also passed `cache_timeout`, rename it to `max_age`
-        # (removed in Flask 2.0). See Flask 2.0 migration guide.
-        if "cache_timeout" in kwargs:
-            warnings.warn(
-                "send_file(cache_timeout=...) was removed in Flask 2.0. "
-                "Use max_age= instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            kwargs["max_age"] = kwargs.pop("cache_timeout")
-
-        return send_file(path_or_file, **kwargs)
-
-    # ------------------------------------------------------------------
-    # JSON config key migration
-    # JSON_SORT_KEYS and JSONIFY_PRETTYPRINT_REGULAR were removed in
-    # Flask 2.3 / 3.x. They must be set on the app's json_provider.
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def apply_json_config(app: "Flask", sort_keys: bool = False, pretty: bool = False) -> None:
-        """
-        Applies JSON formatting options that were previously set via
-        JSON_SORT_KEYS and JSONIFY_PRETTYPRINT_REGULAR config keys.
-
-        Old code:
-            app.config["JSON_SORT_KEYS"] = False
-            app.config["JSONIFY_PRETTYPRINT_REGULAR"] = True
-
-        New code (Flask 3.x):
-            FlaskCompatShim.apply_json_config(app, sort_keys=False, pretty=True)
-
-        TODO: If you relied on JSON_AS_ASCII (also removed), set
-              app.json.ensure_ascii = False directly.
-        """
-        warnings.warn(
-            "JSON_SORT_KEYS and JSONIFY_PRETTYPRINT_REGULAR config keys were "
-            "removed in Flask 2.3+. Use app.json.sort_keys and app.json.mimetype "
-            "or a custom DefaultJSONProvider instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if hasattr(app, "json"):
-            app.json.sort_keys = sort_keys  # type: ignore[attr-defined]
-        else:
-            # TODO: Flask version predates json provider API — manual migration required.
-            pass
-
-
-# ===========================================================================
-# SECTION 2 — SQLAlchemy 1.3 → 2.0 query API shims
-# ===========================================================================
-
-class SAQueryShim:
-    """
-    Provides SQLAlchemy 1.3-style query helpers backed by the SQLAlchemy 2.0
-    select() / Session.execute() API.
-
-    Breaking changes addressed:
-      - Session.query() is legacy in 2.0 (still present but emits warnings)
-      - Query.get() removed → Session.get()
-      - Query.first() / .all() → execute(select(...)).scalars()
-      - engine.execute() removed → use Session or Connection.execute()
-      - Column type imports moved: sqlalchemy.types → sqlalchemy directly
-      - relationship() cascade default changed
-      - declarative_base() moved to sqlalchemy.orm.declarative_base()
-    """
-
-    def __init__(self, session: Any) -> None:
-        if not _SA_AVAILABLE:
-            raise RuntimeError("SQLAlchemy is not installed.")
-        self.session = session
-
-    def get(self, model: type, pk: Any) -> Any:
-        """
-        Replaces the removed Query.get(pk).
-
-        Old code:  session.query(Model).get(pk)
-        New code:  session.get(Model, pk)
-        """
-        warnings.warn(
-            "Query.get() is removed in SQLAlchemy 2.0. Use Session.get(Model, pk).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.session.get(model, pk)
-
-    def all(self, model: type) -> list:
-        """
-        Replaces session.query(Model).all().
-
-        Old code:  session.query(Model).all()
-        New code:  session.execute(select(Model)).scalars().all()
-        """
-        warnings.warn(
-            "session.query() is legacy in SQLAlchemy 2.0. "
-            "Use session.execute(select(Model)).scalars().all().",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        stmt = select(model)
-        return self.session.execute(stmt).scalars().all()
-
-    def filter_by(self, model: type, **kwargs: Any) -> list:
-        """
-        Replaces session.query(Model).filter_by(**kwargs).all().
-
-        Old code:  session.query(Model).filter_by(email=email).all()
-        New code:  session.execute(select(Model).filter_by(**kwargs)).scalars().all()
-        """
-        warnings.warn(
-            "session.query().filter_by() is legacy in SQLAlchemy 2.0. "
-            "Use session.execute(select(Model).filter_by(...)).scalars().all().",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        stmt = select(model).filter_by(**kwargs)
-        return self.session.execute(stmt).scalars().all()
-
-    def first(self, model: type, **kwargs: Any) -> Any:
-        """
-        Replaces session.query(Model).filter_by(**kwargs).first().
-
-        Old code:  session.query(Model).filter_by(email=email).first()
-        New code:  session.execute(select(Model).filter_by(**kwargs)).scalars().first()
-        """
-        warnings.warn(
-            "session.query().filter_by().first() is legacy in SQLAlchemy 2.0. "
-            "Use session.execute(select(Model).filter_by(...)).scalars().first().",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        stmt = select(model).filter_by(**kwargs)
-        return self.session.execute(stmt).scalars().first()
-
-    def count(self, model: type) -> int:
-        """
-        Replaces session.query(Model).count().
-
-        Old code:  session.query(Model).count()
-        New code:  session.scalar(select(func.count()).select_from(Model))
-        """
-        from sqlalchemy import func  # type: ignore[import]
-
-        warnings.warn(
-            "session.query().count() is legacy in SQLAlchemy 2.0. "
-            "Use session.scalar(select(func.count()).select_from(Model)).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        stmt = select(sqlalchemy.func.count()).select_from(model)
-        return self.session.scalar(stmt)
-
-
-def get_declarative_base() -> Any:
-    """
-    Returns sqlalchemy.orm.DeclarativeBase (2.0) or the legacy declarative_base().
-
-    Old code:  from sqlalchemy.ext.declarative import declarative_base; Base = declarative_base()
-    New code:  from sqlalchemy.orm import DeclarativeBase; class Base(DeclarativeBase): pass
-
-    This helper bridges both styles.
-
-    TODO: Migrate all model base classes to inherit from sqlalchemy.orm.DeclarativeBase
-    directly, as declarative_base() is removed in SQLAlchemy 2.0 (it still exists in
-    the 2.0 release as a legacy alias but will be removed in a future version).
-    """
-    if _SA_VERSION >= (2, 0):
-        try:
-            from sqlalchemy.orm import DeclarativeBase  # type: ignore[import]
-
-            class _Base(DeclarativeBase):  # type: ignore[misc]
-                pass
-
-            return _Base
-        except ImportError:
-            pass
-    # Fallback for SQLAlchemy 1.x
-    from sqlalchemy.ext.declarative import declarative_base  # type: ignore[import]
     warnings.warn(
-        "sqlalchemy.ext.declarative.declarative_base() is legacy. "
-        "Migrate to sqlalchemy.orm.DeclarativeBase.",
+        "declarative_base() is deprecated in SQLAlchemy 2.0. "
+        "Define a base class that inherits from sqlalchemy.orm.DeclarativeBase instead. "
+        # TODO: Migrate all models to use `class Base(DeclarativeBase): pass`
+        #       and remove this shim once migration is complete.
+        ,
         DeprecationWarning,
         stacklevel=2,
     )
-    return declarative_base()
+    if _declarative_base is not None:
+        return _declarative_base(*args, **kwargs)
+    # Fallback: return a DeclarativeBase subclass
+    class _LegacyBase(DeclarativeBase):  # type: ignore[misc]
+        pass
+    return _LegacyBase
 
 
-def create_engine_compat(url: str, **kwargs: Any) -> Any:
+# -- 2b. Session.execute() now requires text() for raw SQL strings.
+#        Provide a helper that wraps bare strings automatically.
+def safe_execute(session: Session, statement: Any, params: Optional[Dict] = None) -> Any:
     """
-    Wraps sqlalchemy.create_engine, removing kwargs that were valid in 1.3
-    but removed in 2.0.
+    Execute *statement* on *session*, automatically wrapping bare strings in
+    ``sqlalchemy.text()`` so that SQLAlchemy 2.0 does not raise
+    ``ObjectNotExecutableError``.
 
-    Removed kwargs handled:
-      - convert_unicode (removed in 2.0)
-      - implicit_returning (removed in 2.0; now always True)
-
-    TODO: If you used execution_options on the engine directly, migrate to
-    Connection.execution_options() per the SQLAlchemy 2.0 migration guide.
+    .. deprecated::
+        Pass a proper ``select()`` / ``text()`` construct directly.
+        # TODO: Replace all ``session.execute("SELECT ...")`` call-sites with
+        #       ``session.execute(text("SELECT ..."))`` or a proper ORM construct.
     """
-    if not _SA_AVAILABLE:
-        raise RuntimeError("SQLAlchemy is not installed.")
+    if isinstance(statement, str):
+        warnings.warn(
+            "Passing a raw string to session.execute() is not supported in "
+            "SQLAlchemy 2.0. Wrap the string with sqlalchemy.text(). "
+            # TODO: Update the call-site to use text() or a select() construct.
+            ,
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        statement = text(statement)
+    if params:
+        return session.execute(statement, params)
+    return session.execute(statement)
 
-    removed_kwargs = ["convert_unicode", "implicit_returning"]
-    for key in removed_kwargs:
-        if key in kwargs:
-            warnings.warn(
-                f"create_engine() kwarg '{key}' was removed in SQLAlchemy 2.0 and "
-                f"has been ignored by this shim.",
-                DeprecationWarning,
-                stacklevel=2,
+
+# -- 2c. Legacy Query API shim.
+#        session.query(Model) was removed in SQLAlchemy 2.0.
+#        This wrapper re-implements the most common patterns via select().
+class LegacyQueryShim:
+    """
+    Minimal shim that translates the most common SQLAlchemy 1.x
+    ``session.query(Model)`` patterns into SQLAlchemy 2.0 ``select()`` calls.
+
+    Supported methods: .all(), .first(), .one(), .one_or_none(),
+                       .filter(), .filter_by(), .order_by(), .limit(),
+                       .offset(), .count(), .get()
+
+    # TODO: Replace all session.query() call-sites with explicit select()
+    #       statements.  This shim covers common cases but cannot handle
+    #       every legacy query pattern (e.g. complex joins, subqueries).
+    """
+
+    def __init__(self, session: Session, entity: Any) -> None:
+        self._session = session
+        self._entity = entity
+        self._stmt = select(entity)
+
+    def filter(self, *criteria: Any) -> "LegacyQueryShim":
+        self._stmt = self._stmt.where(*criteria)
+        return self
+
+    def filter_by(self, **kwargs: Any) -> "LegacyQueryShim":
+        for key, value in kwargs.items():
+            self._stmt = self._stmt.where(
+                getattr(self._entity, key) == value
             )
-            kwargs.pop(key)
+        return self
 
-    # TODO: If you relied on engine.execute(), that was removed in SQLAlchemy 2.0.
-    # Use a Session or an explicit Connection via engine.connect() instead.
+    def order_by(self, *clauses: Any) -> "LegacyQueryShim":
+        self._stmt = self._stmt.order_by(*clauses)
+        return self
 
-    return sqlalchemy.create_engine(url, **kwargs)
+    def limit(self, n: int) -> "LegacyQueryShim":
+        self._stmt = self._stmt.limit(n)
+        return self
+
+    def offset(self, n: int) -> "LegacyQueryShim":
+        self._stmt = self._stmt.offset(n)
+        return self
+
+    def all(self) -> list:
+        return list(self._session.scalars(self._stmt).all())
+
+    def first(self) -> Any:
+        return self._session.scalars(self._stmt).first()
+
+    def one(self) -> Any:
+        return self._session.scalars(self._stmt).one()
+
+    def one_or_none(self) -> Any:
+        return self._session.scalars(self._stmt).one_or_none()
+
+    def count(self) -> int:
+        from sqlalchemy import func
+        count_stmt = select(func.count()).select_from(self._stmt.subquery())
+        return self._session.execute(count_stmt).scalar_one()
+
+    def get(self, pk: Any) -> Any:
+        # TODO: session.query(Model).get(pk) → session.get(Model, pk)
+        return self._session.get(self._entity, pk)
 
 
-# ===========================================================================
-# SECTION 3 — Config format migration
-# ===========================================================================
+def legacy_query(session: Session, entity: Any) -> LegacyQueryShim:
+    """
+    Drop-in replacement for ``session.query(Model)``.
+
+    Example::
+
+        # Old (SQLAlchemy 1.3):
+        users = session.query(User).filter_by(active=True).all()
+
+        # Shim (temporary):
+        users = legacy_query(session, User).filter_by(active=True).all()
+
+        # New (SQLAlchemy 2.0 — target state):
+        users = session.scalars(select(User).where(User.active == True)).all()
+
+    # TODO: Remove all legacy_query() usages once the codebase is fully
+    #       migrated to the SQLAlchemy 2.0 select() API.
+    """
+    warnings.warn(
+        "legacy_query() is a temporary shim for session.query(). "
+        "Migrate to session.scalars(select(Model)...) as per SQLAlchemy 2.0. "
+        # TODO: Migrate each call-site to the new select() API.
+        ,
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return LegacyQueryShim(session, entity)
+
+
+# -- 2d. Column type import path changes.
+#        In SQLAlchemy 2.0, types are still in sqlalchemy but mapped_column /
+#        Mapped are the preferred way to declare columns.
+# TODO: Replace `Column(String)` declarations with `mapped_column(String)` and
+#       add `Mapped[str]` type annotations on your model attributes.
+
+# -- 2e. relationship() lazy loading default changed.
+# TODO: SQLAlchemy 2.0 raises an error for lazy-loaded relationships accessed
+#       outside a session.  Audit all relationship() declarations and add
+#       explicit lazy="select" (old default) or migrate to eager loading /
+#       selectinload() where appropriate.
+
+# ---------------------------------------------------------------------------
+# 3.  Config format migration  (old → new)
+# ---------------------------------------------------------------------------
 
 def migrate_config(old_config: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Transforms an old Flask 1.x / SQLAlchemy 1.3 config dict into the format
-    expected by Flask 3.x / SQLAlchemy 2.0.
+    Transform an old-style application config dict into the new format
+    expected by Flask 3.x and SQLAlchemy 2.0.
 
-    Handles the following breaking config changes:
+    Old format (Flask 1.x era)::
 
-    Flask:
-      - JSON_SORT_KEYS          → removed (set on app.json.sort_keys)
-      - JSONIFY_PRETTYPRINT_REGULAR → removed (set on app.json.mimetype)
-      - JSON_AS_ASCII           → removed (set on app.json.ensure_ascii)
-      - PROPAGATE_EXCEPTIONS    → still valid; default changed to True in testing
-      - SERVER_NAME             → still valid; warn if set (affects URL generation)
+        {
+            "DEBUG": True,
+            "TESTING": False,
+            "SQLALCHEMY_DATABASE_URI": "sqlite:///dev.db",
+            "SQLALCHEMY_TRACK_MODIFICATIONS": True,   # removed in SQLAlchemy 2.0
+            "SECRET_KEY": "hardcoded-secret",          # must move to env var
+            "SERVER_NAME": "localhost:5000",
+            "JSON_SORT_KEYS": True,                    # removed in Flask 2.3
+            "JSON_AS_ASCII": True,                     # removed in Flask 2.3
+            "JSONIFY_PRETTYPRINT_REGULAR": False,      # removed in Flask 2.3
+            "PROPAGATE_EXCEPTIONS": None,
+        }
 
-    SQLAlchemy (via Flask-SQLAlchemy):
-      - SQLALCHEMY_TRACK_MODIFICATIONS → removed in Flask-SQLAlchemy 3.x
-      - SQLALCHEMY_COMMIT_ON_TEARDOWN  → removed; use explicit commits
-      - SQLALCHEMY_POOL_SIZE, SQLALCHEMY_MAX_OVERFLOW, SQLALCHEMY_POOL_TIMEOUT
-        → moved to SQLALCHEMY_ENGINE_OPTIONS dict in Flask-SQLAlchemy 3.x
+    New format (Flask 3.x / SQLAlchemy 2.0)::
 
-    Health / readiness probe config (new keys introduced by this upgrade):
-      - HEALTH_SERVICE_NAME     → new key for /api/health response
-      - READINESS_CHECKS        → new key listing readiness check callables
+        {
+            "DEBUG": True,
+            "TESTING": False,
+            "SQLALCHEMY_DATABASE_URI": "sqlite:///dev.db",
+            # SQLALCHEMY_TRACK_MODIFICATIONS removed
+            "SECRET_KEY": "<from env>",
+            # SERVER_NAME kept only if explicitly needed
+            # JSON_* keys removed — configure via app.json provider instead
+        }
+
+    Returns the migrated config dict.  Emits warnings for keys that require
+    manual intervention.
     """
     new_config: Dict[str, Any] = {}
-    engine_options: Dict[str, Any] = {}
 
     for key, value in old_config.items():
 
-        # ── Flask JSON config keys removed in Flask 2.3 / 3.x ──────────────
+        # ── Removed Flask 2.3 / 3.x keys ─────────────────────────────────────
         if key == "JSON_SORT_KEYS":
             warnings.warn(
-                "Config key JSON_SORT_KEYS was removed in Flask 2.3. "
-                "Set app.json.sort_keys after app creation.",
+                "Config key 'JSON_SORT_KEYS' was removed in Flask 2.3. "
+                "Set app.json.sort_keys = <bool> after app creation instead. "
+                # TODO: Replace config['JSON_SORT_KEYS'] with
+                #       app.json.sort_keys = True/False in your create_app().
+                ,
                 DeprecationWarning,
                 stacklevel=2,
             )
-            # Store as a hint for post-creation setup; not a real Flask config key.
-            new_config["_COMPAT_JSON_SORT_KEYS"] = value
+            continue  # drop from new config
+
+        if key == "JSON_AS_ASCII":
+            warnings.warn(
+                "Config key 'JSON_AS_ASCII' was removed in Flask 2.3. "
+                "Set app.json.ensure_ascii = <bool> after app creation instead. "
+                # TODO: Replace config['JSON_AS_ASCII'] with
+                #       app.json.ensure_ascii = True/False in your create_app().
+                ,
+                DeprecationWarning,
+                stacklevel=2,
+            )
             continue
 
         if key == "JSONIFY_PRETTYPRINT_REGULAR":
             warnings.warn(
-                "Config key JSONIFY_PRETTYPRINT_REGULAR was removed in Flask 2.3. "
-                "Set app.json.mimetype or use a custom DefaultJSONProvider.",
+                "Config key 'JSONIFY_PRETTYPRINT_REGULAR' was removed in Flask 2.3. "
+                "Set app.json.mimetype or use app.json.compact = False instead. "
+                # TODO: Replace with app.json.compact = not <old_value>.
+                ,
                 DeprecationWarning,
                 stacklevel=2,
             )
-            new_config["_COMPAT_JSONIFY_PRETTYPRINT_REGULAR"] = value
             continue
 
-        if key == "JSON_AS_ASCII":
+        if key == "JSONIFY_MIMETYPE":
             warnings.warn(
-                "Config key JSON_AS_ASCII was removed in Flask 2.3. "
-                "Set app.json.ensure_ascii after app creation.",
+                "Config key 'JSONIFY_MIMETYPE' was removed in Flask 2.3. "
+                "Set app.json.mimetype = <value> after app creation instead. "
+                # TODO: Replace with app.json.mimetype = <value>.
+                ,
                 DeprecationWarning,
                 stacklevel=2,
             )
-            new_config["_COMPAT_JSON_AS_ASCII"] = value
             continue
 
-        # ── Flask-SQLAlchemy keys removed in Flask-SQLAlchemy 3.x ───────────
+        # ── SQLAlchemy 2.0 removed keys ───────────────────────────────────────
         if key == "SQLALCHEMY_TRACK_MODIFICATIONS":
             warnings.warn(
-                "Config key SQLALCHEMY_TRACK_MODIFICATIONS was removed in "
-                "Flask-SQLAlchemy 3.0. Remove it from your config.",
+                "Config key 'SQLALCHEMY_TRACK_MODIFICATIONS' is not supported "
+                "in SQLAlchemy 2.0 / Flask-SQLAlchemy 3.x and has been removed. "
+                # TODO: Remove SQLALCHEMY_TRACK_MODIFICATIONS from your config.
+                #       The event system is always available; tracking is gone.
+                ,
                 DeprecationWarning,
                 stacklevel=2,
             )
-            # Drop silently — no equivalent in Flask-SQLAlchemy 3.x.
             continue
 
         if key == "SQLALCHEMY_COMMIT_ON_TEARDOWN":
             warnings.warn(
-                "Config key SQLALCHEMY_COMMIT_ON_TEARDOWN was removed. "
-                "Use explicit db.session.commit() calls.",
+                "Config key 'SQLALCHEMY_COMMIT_ON_TEARDOWN' was removed. "
+                "Manage transactions explicitly in your view functions or use "
+                "a context manager. "
+                # TODO: Remove SQLALCHEMY_COMMIT_ON_TEARDOWN and add explicit
+                #       db.session.commit() / db.session.rollback() calls.
+                ,
                 DeprecationWarning,
                 stacklevel=2,
             )
-            # TODO: Audit all request handlers to ensure explicit commits are present.
             continue
 
-        # ── SQLAlchemy engine options moved to SQLALCHEMY_ENGINE_OPTIONS ─────
-        if key == "SQLALCHEMY_POOL_SIZE":
-            warnings.warn(
-                "SQLALCHEMY_POOL_SIZE is deprecated. "
-                "Use SQLALCHEMY_ENGINE_OPTIONS = {'pool_size': ...}.",
-                DeprecationWarning,
-                stacklevel=2,
+        # ── Hardcoded secrets — must move to environment variables ─────────────
+        if key == "SECRET_KEY":
+            env_value = os.environ.get("SECRET_KEY")
+            if env_value:
+                new_config[key] = env_value
+            else:
+                warnings.warn(
+                    "Config key 'SECRET_KEY' should be loaded from the environment, "
+                    "not hardcoded. Set the SECRET_KEY environment variable. "
+                    # TODO: Remove the hardcoded SECRET_KEY value and load it with:
+                    #       app.config['SECRET_KEY'] = os.environ['SECRET_KEY']
+                    #       Add SECRET_KEY to your .env.example (without a real value).
+                    ,
+                    UserWarning,
+                    stacklevel=2,
+                )
+                new_config[key] = value  # keep for now, but warn
+            continue
+
+        if key in ("DATABASE_URL", "SQLALCHEMY_DATABASE_URI"):
+            env_value = os.environ.get("DATABASE_URL") or os.environ.get(
+                "SQLALCHEMY_DATABASE_URI"
             )
-            engine_options["pool_size"] = value
+            if env_value:
+                new_config["SQLALCHEMY_DATABASE_URI"] = env_value
+            else:
+                warnings.warn(
+                    f"Config key '{key}' should be loaded from the DATABASE_URL "
+                    "environment variable, not hardcoded. "
+                    # TODO: Remove hardcoded database credentials from config.
+                    #       Use os.environ['DATABASE_URL'] and add it to .env.example.
+                    ,
+                    UserWarning,
+                    stacklevel=2,
+                )
+                new_config["SQLALCHEMY_DATABASE_URI"] = value
             continue
 
-        if key == "SQLALCHEMY_MAX_OVERFLOW":
-            warnings.warn(
-                "SQLALCHEMY_MAX_OVERFLOW is deprecated. "
-                "Use SQLALCHEMY_ENGINE_OPTIONS = {'max_overflow': ...}.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            engine_options["max_overflow"] = value
+        # ── PROPAGATE_EXCEPTIONS: None is no longer valid in Flask 3.x ─────────
+        if key == "PROPAGATE_EXCEPTIONS" and value is None:
+            # Flask 3.x treats None as False; make it explicit.
+            new_config[key] = False
             continue
 
-        if key == "SQLALCHEMY_POOL_TIMEOUT":
-            warnings.warn(
-                "SQLALCHEMY_POOL_TIMEOUT is deprecated. "
-                "Use SQLALCHEMY_ENGINE_OPTIONS = {'pool_timeout': ...}.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            engine_options["pool_timeout"] = value
-            continue
-
-        if key == "SQLALCHEMY_POOL_RECYCLE":
-            warnings.warn(
-                "SQLALCHEMY_POOL_RECYCLE is deprecated. "
-                "Use SQLALCHEMY_ENGINE_OPTIONS = {'pool_recycle': ...}.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            engine_options["pool_recycle"] = value
-            continue
-
-        # ── SERVER_NAME warning ──────────────────────────────────────────────
-        if key == "SERVER_NAME" and value:
-            warnings.warn(
-                "SERVER_NAME is set. In Flask 2.x+ this affects subdomain matching "
-                "and URL generation. Verify it is still correct for your deployment.",
-                UserWarning,
-                stacklevel=2,
-            )
-            new_config[key] = value
-            continue
-
-        # ── Pass through all other keys unchanged ────────────────────────────
+        # ── Pass through all other keys unchanged ─────────────────────────────
         new_config[key] = value
 
-    # Merge collected engine options
-    if engine_options:
-        existing = new_config.get("SQLALCHEMY_ENGINE_OPTIONS", {})
-        existing.update(engine_options)
-        new_config["SQLALCHEMY_ENGINE_OPTIONS"] = existing
-
-    # ── Inject new health/readiness config keys if absent ───────────────────
-    new_config.setdefault("HEALTH_SERVICE_NAME", os.environ.get("SERVICE_NAME", "service"))
-    new_config.setdefault("READINESS_CHECKS", [])
-
-    # TODO: Populate READINESS_CHECKS with callables that verify your database
-    # connection and any other downstream dependencies required before the service
-    # is considered ready to accept traffic (see /api/ready endpoint below).
+    # Ensure SQLALCHEMY_DATABASE_URI is present
+    if "SQLALCHEMY_DATABASE_URI" not in new_config:
+        db_url = os.environ.get("DATABASE_URL", "sqlite:///app.db")
+        new_config["SQLALCHEMY_DATABASE_URI"] = db_url
+        # TODO: Set the DATABASE_URL environment variable for your target
+        #       environment (development, staging, production).
 
     return new_config
 
 
-def apply_compat_json_settings(app: "Flask", migrated_config: Dict[str, Any]) -> None:
+# ---------------------------------------------------------------------------
+# 4.  /api/health and /api/ready blueprints
+# ---------------------------------------------------------------------------
+# These blueprints implement the liveness and readiness probe endpoints
+# described in the spec.  Register them on your Flask app via
+# register_health_blueprints(app) inside your create_app() factory.
+
+health_bp = Blueprint("health", __name__)
+ready_bp = Blueprint("ready", __name__)
+
+# The service name is read from the SERVICE_NAME environment variable so that
+# the same shim can be used by multiple services without code changes.
+_SERVICE_NAME: str = os.environ.get("SERVICE_NAME", "python-service")
+
+
+@health_bp.get("/api/health")
+def liveness() -> Any:
     """
-    Applies the _COMPAT_* keys produced by migrate_config() to the Flask app's
-    json provider, which is the correct location in Flask 3.x.
+    Liveness probe — ``GET /api/health``.
 
-    Call this immediately after app creation and config loading.
-    """
-    if not _FLASK_AVAILABLE:
-        return
+    Returns ``200 OK`` with::
 
-    if "_COMPAT_JSON_SORT_KEYS" in migrated_config:
-        app.json.sort_keys = migrated_config["_COMPAT_JSON_SORT_KEYS"]  # type: ignore[attr-defined]
-
-    if "_COMPAT_JSON_AS_ASCII" in migrated_config:
-        app.json.ensure_ascii = migrated_config["_COMPAT_JSON_AS_ASCII"]  # type: ignore[attr-defined]
-
-    # TODO: JSONIFY_PRETTYPRINT_REGULAR has no direct equivalent in Flask 3.x's
-    # DefaultJSONProvider. To enable pretty-printing, subclass DefaultJSONProvider
-    # and override dumps() to pass indent=2. See Flask 3.x docs.
-
-
-# ===========================================================================
-# SECTION 4 — /api/health and /api/ready Blueprint
-# ===========================================================================
-
-def create_health_blueprint(
-    service_name: str = "service",
-    readiness_checks: Optional[list[Callable[[], bool]]] = None,
-) -> "Blueprint":
-    """
-    Creates and returns a Flask Blueprint that registers:
-
-      GET /api/health  — liveness probe (always 200 if the process is alive)
-      GET /api/ready   — readiness probe (200 if all readiness_checks pass, 503 otherwise)
-
-    This matches the endpoint contract defined in spec.md:
-      - /api/health response: { status, service, timestamp }
-      - /api/ready  response: { status, service, timestamp, checks: { <name>: bool } }
-
-    Parameters
-    ----------
-    service_name:
-        Value for the "service" field in the response body.
-        Defaults to the SERVICE_NAME environment variable or "service".
-    readiness_checks:
-        List of zero-argument callables that return True (ready) or False (not ready).
-        Each callable should be named (its __name__ is used as the check key).
-
-    TODO: Add actual readiness check callables for:
-          - Database connectivity (e.g. db.session.execute(text("SELECT 1")))
-          - Any required downstream HTTP dependencies
-          - Cache / Redis connectivity if applicable
-    """
-    if not _FLASK_AVAILABLE:
-        raise RuntimeError("Flask is not installed.")
-
-    if readiness_checks is None:
-        readiness_checks = []
-
-    health_bp = Blueprint("health", __name__)
-
-    @health_bp.get("/api/health")
-    def liveness() -> Any:
-        """
-        Liveness probe — returns 200 as long as the Python process is running.
-        No dependency checks are performed here by design.
-
-        Response shape (matches spec.md):
-          { "status": "ok", "service": "<name>", "timestamp": "<ISO-8601>" }
-        """
-        body = {
-            "status": "ok",
-            "service": service_name,
-            "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        {
+            "status":    "ok",
+            "service":   "<SERVICE_NAME>",
+            "timestamp": "<ISO-8601 UTC string>"
         }
-        return jsonify(body), 200
 
-    @health_bp.get("/api/ready")
-    def readiness() -> Any:
-        """
-        Readiness probe — runs all registered readiness_checks.
-        Returns 200 if all checks pass, 503 if any check fails.
+    This endpoint must remain unauthenticated so that load balancers and
+    Kubernetes liveness probes can reach it without credentials.
+    Matches the contract already implemented in the Java HealthController and
+    the Node.js HealthController.
+    """
+    body = {
+        "status": "ok",
+        "service": _SERVICE_NAME,
+        "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    return jsonify(body), 200
 
-        Response shape (matches spec.md):
-          {
-            "status": "ready" | "not_ready",
-            "service": "<name>",
-            "timestamp": "<ISO-8601>",
-            "checks": { "<check_name>": true | false, ... }
-          }
 
-        TODO: Wire in real dependency checks via the readiness_checks parameter.
-        """
-        check_results: Dict[str, bool] = {}
-        all_ready = True
+# ---------------------------------------------------------------------------
+# Readiness check registry
+# ---------------------------------------------------------------------------
+# Register callables that return (bool, str) — (is_ready, reason).
+# The /api/ready endpoint calls all registered checks and returns 200 only
+# when every check passes.
+#
+# Example::
+#
+#   from migration_shim import register_readiness_check
+#
+#   def db_check():
+#       try:
+#           db.session.execute(text("SELECT 1"))
+#           return True, "database ok"
+#       except Exception as exc:
+#           return False, f"database error: {exc}"
+#
+#   register_readiness_check("database", db_check)
 
-        for check_fn in readiness_checks:
-            check_name = getattr(check_fn, "__name__", str(check_fn))
-            try:
-                result = bool(check_fn())
-            except Exception:
-                result = False
-            check_results[check_name] = result
-            if not result:
-                all_ready = False
+_readiness_checks: Dict[str, Callable[[], tuple[bool, str]]] = {}
 
-        status_str = "ready" if all_ready else "not_ready"
-        http_status = 200 if all_ready else 503
 
-        body = {
-            "status": status_str,
-            "service": service_name,
-            "timestamp": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "checks": check_results,
+def register_readiness_check(name: str, fn: Callable[[], tuple[bool, str]]) -> None:
+    """
+    Register a named readiness check function.
+
+    *fn* must be a zero-argument callable that returns ``(bool, str)``:
+    - ``True, "reason"``  → check passed
+    - ``False, "reason"`` → check failed (service not ready)
+
+    # TODO: Register at least one meaningful readiness check per service,
+    #       e.g. a database connectivity check, before deploying to production.
+    """
+    _readiness_checks[name] = fn
+
+
+@ready_bp.get("/api/ready")
+def readiness() -> Any:
+    """
+    Readiness probe — ``GET /api/ready``.
+
+    Runs all registered readiness checks.
+
+    Returns ``200 OK`` when all checks pass::
+
+        {
+            "status":    "ready",
+            "service":   "<SERVICE_NAME>",
+            "timestamp": "<ISO-8601 UTC string>",
+            "checks":    { "<name>": "ok", ... }
         }
-        return jsonify(body), http_status
 
-    return health_bp
+    Returns ``503 Service Unavailable`` when any check fails::
 
+        {
+            "status":    "not_ready",
+            "service":   "<SERVICE_NAME>",
+            "timestamp": "<ISO-8601 UTC string>",
+            "checks":    { "<name>": "<reason>", ... }
+        }
 
-def register_health_endpoints(
-    app: "Flask",
-    service_name: Optional[str] = None,
-    readiness_checks: Optional[list[Callable[[], bool]]] = None,
-) -> None:
+    This endpoint must remain unauthenticated.
+    # TODO: Add this path to your security allowlist.
+    #       For Flask-Login / JWT-based auth, exclude /api/ready from the
+    #       @login_required / token_required decorators.
+    #       For the payment-service SecurityConfig.java, add:
+    #           .requestMatchers("/api/ready/**").permitAll()
+    #       alongside the existing /api/health/** rule.
     """
-    Convenience function: creates the health blueprint and registers it on app.
+    timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    check_results: Dict[str, str] = {}
+    all_ready = True
 
-    Parameters
-    ----------
-    app:
-        The Flask application instance.
-    service_name:
-        Overrides the service name in health responses.
-        Falls back to app.config.get("HEALTH_SERVICE_NAME") or SERVICE_NAME env var.
-    readiness_checks:
-        List of zero-argument callables returning bool.
-        Falls back to app.config.get("READINESS_CHECKS", []).
-
-    Example usage in an application factory:
-
-        from migration_shim import register_health_endpoints
-
-        def create_app(config=None):
-            app = Flask(__name__)
-            # ... load config, init extensions ...
-            register_health_endpoints(app)
-            return app
-
-    TODO: Pass actual readiness check callables once database and other
-    dependencies are initialised. Example:
-
-        def check_db():
-            from myapp.extensions import db
-            db.session.execute(text("SELECT 1"))
-            return True
-
-        register_health_endpoints(app, readiness_checks=[check_db])
-    """
-    if not _FLASK_AVAILABLE:
-        raise RuntimeError("Flask is not installed.")
-
-    resolved_name: str = (
-        service_name
-        or app.config.get("HEALTH_SERVICE_NAME")
-        or os.environ.get("SERVICE_NAME", "service")
-    )
-
-    resolved_checks: list[Callable[[], bool]] = (
-        readiness_checks
-        if readiness_checks is not None
-        else app.config.get("READINESS_CHECKS", [])
-    )
-
-    bp = create_health_blueprint(
-        service_name=resolved_name,
-        readiness_checks=resolved_checks,
-    )
-    app.register_blueprint(bp)
-
-
-# ===========================================================================
-# SECTION 5 — SQLAlchemy readiness check helper
-# ===========================================================================
-
-def make_sqlalchemy_readiness_check(db_session_factory: Callable) -> Callable[[], bool]:
-    """
-    Returns a readiness check callable that verifies the database is reachable
-    by executing a lightweight SELECT 1 query.
-
-    Parameters
-    ----------
-    db_session_factory:
-        A zero-argument callable that returns a SQLAlchemy Session, or a
-        Flask-SQLAlchemy db object (pass db.session).
-
-    Usage:
-
-        from migration_shim import make_sqlalchemy_readiness_check, register_health_endpoints
-        from myapp.extensions import db
-
-        def create_app():
-            app = Flask(__name__)
-            db.init_app(app)
-            check_db = make_sqlalchemy_readiness_check(lambda: db.session)
-            register_health_endpoints(app, readiness_checks=[check_db])
-            return app
-
-    TODO: If your app uses async SQLAlchemy (AsyncSession), this synchronous
-    check will not work. Implement an async readiness check and use an async
-    Flask view instead.
-    """
-    if not _SA_AVAILABLE:
-        raise RuntimeError("SQLAlchemy is not installed.")
-
-    def check_database() -> bool:
+    for name, fn in _readiness_checks.items():
         try:
-            session = db_session_factory()
-            session.execute(text("SELECT 1"))
-            return True
-        except Exception:
-            return False
+            passed, reason = fn()
+        except Exception as exc:  # noqa: BLE001
+            passed = False
+            reason = f"check raised exception: {exc}"
+        check_results[name] = reason if reason else ("ok" if passed else "failed")
+        if not passed:
+            all_ready = False
 
-    check_database.__name__ = "database"
-    return check_database
+    # If no checks are registered, report ready (liveness-only mode).
+    # TODO: Register at least one readiness check (e.g. DB ping) per service.
+    if not _readiness_checks:
+        check_results["default"] = "no checks registered"
+
+    status_str = "ready" if all_ready else "not_ready"
+    http_status = 200 if all_ready else 503
+
+    body = {
+        "status": status_str,
+        "service": _SERVICE_NAME,
+        "timestamp": timestamp,
+        "checks": check_results,
+    }
+    return jsonify(body), http_status
 
 
-# ===========================================================================
-# SECTION 6 — Standalone demo / smoke test
-# ===========================================================================
-
-def _build_demo_app() -> "Flask":
+def register_health_blueprints(app: Flask) -> None:
     """
-    Builds a minimal Flask 3.x application with /api/health and /api/ready
-    endpoints registered, demonstrating the shim in action.
+    Register the ``/api/health`` (liveness) and ``/api/ready`` (readiness)
+    blueprints on *app*.
 
-    This is NOT production code — it is a smoke-test entry point.
+    Call this inside your ``create_app()`` factory **after** applying the
+    migrated config::
+
+        def create_app(config_overrides=None):
+            app = Flask(__name__)
+            app.config.update(migrate_config(raw_config))
+            register_health_blueprints(app)
+            # ... register other blueprints ...
+            return app
+
+    Both endpoints are intentionally registered **without** any authentication
+    middleware so that orchestration platforms can probe them freely.
     """
-    if not _FLASK_AVAILABLE:
-        raise RuntimeError("Flask is not installed.")
+    app.register_blueprint(health_bp)
+    app.register_blueprint(ready_bp)
 
+
+# ---------------------------------------------------------------------------
+# 5.  Application factory reference implementation
+# ---------------------------------------------------------------------------
+
+def create_flask_app(
+    raw_config: Optional[Dict[str, Any]] = None,
+    extra_blueprints: Optional[list] = None,
+) -> Flask:
+    """
+    Reference application factory for Flask 3.x.
+
+    Applies the config migration shim, registers health/ready blueprints, and
+    returns a fully configured ``Flask`` application instance without calling
+    ``app.run()``.
+
+    :param raw_config:       Optional dict of old-style config values to migrate.
+    :param extra_blueprints: Optional list of ``(blueprint, kwargs)`` tuples to
+                             register after the health blueprints.
+
+    # TODO: Replace any module-level `app = Flask(__name__)` + `app.run()`
+    #       patterns in your codebase with a call to this factory (or your own
+    #       equivalent) and a separate entry-point that calls app.run() or
+    #       hands the app to a WSGI server (gunicorn, waitress, etc.).
+    """
     app = Flask(__name__)
 
-    # ── Migrate an example old-style config ─────────────────────────────────
-    old_config: Dict[str, Any] = {
-        "DEBUG": False,
-        "SECRET_KEY": os.environ.get("SECRET_KEY", "change-me"),
-        "SQLALCHEMY_DATABASE_URI": os.environ.get("DATABASE_URL", "sqlite:///:memory:"),
-        # Old keys that must be migrated:
-        "SQLALCHEMY_TRACK_MODIFICATIONS": False,
-        "JSON_SORT_KEYS": False,
-        "JSONIFY_PRETTYPRINT_REGULAR": False,
-        "SQLALCHEMY_POOL_SIZE": 5,
-        "SQLALCHEMY_MAX_OVERFLOW": 10,
-    }
+    # Apply migrated config
+    migrated = migrate_config(raw_config or {})
+    app.config.update(migrated)
 
-    new_config = migrate_config(old_config)
-    app.config.update(new_config)
-    apply_compat_json_settings(app, new_config)
+    # Register probe endpoints
+    register_health_blueprints(app)
 
-    # ── Apply before_first_request shim ─────────────────────────────────────
-    shim = FlaskCompatShim(app)
+    # Register any additional blueprints supplied by the caller
+    if extra_blueprints:
+        for bp_entry in extra_blueprints:
+            if isinstance(bp_entry, (list, tuple)) and len(bp_entry) == 2:
+                bp, bp_kwargs = bp_entry
+                app.register_blueprint(bp, **bp_kwargs)
+            else:
+                app.register_blueprint(bp_entry)
 
-    @shim.before_first_request
-    def _on_first_request() -> None:
-        app.logger.info("First request received — running startup tasks.")
-        # TODO: Place any one-time startup logic here (e.g. warm caches).
-
-    # ── Register health + readiness endpoints ────────────────────────────────
-    # TODO: Replace the lambda below with a real database readiness check once
-    # SQLAlchemy is initialised. See make_sqlalchemy_readiness_check().
-    def _always_ready() -> bool:
-        return True
-
-    _always_ready.__name__ = "stub_always_ready"
-
-    register_health_endpoints(
-        app,
-        service_name="payment-service",
-        readiness_checks=[_always_ready],
-    )
+    # TODO: Wire up Flask-SQLAlchemy (or plain SQLAlchemy) here:
+    #   from flask_sqlalchemy import SQLAlchemy
+    #   db = SQLAlchemy()
+    #   db.init_app(app)
+    #
+    # TODO: Wire up Flask-Migrate (Alembic) for schema migrations:
+    #   from flask_migrate import Migrate
+    #   migrate = Migrate(app, db)
+    #
+    # TODO: Remove any hardcoded credentials from the codebase and load them
+    #       exclusively from environment variables (os.environ / python-dotenv).
+    #       Add a .env.example file documenting all required variables without
+    #       real values.
+    #
+    # TODO: Add a Dockerfile targeting python:3.12-slim (or 3.13-slim) and a
+    #       CI/CD pipeline step that runs `pip audit` or `safety check` for
+    #       dependency vulnerability scanning.
 
     return app
 
 
+# ---------------------------------------------------------------------------
+# 6.  SQLAlchemy 2.0 engine / session factory helpers
+# ---------------------------------------------------------------------------
+
+def create_engine_v2(database_url: Optional[str] = None, **kwargs: Any) -> Any:
+    """
+    Create a SQLAlchemy 2.0-compatible engine.
+
+    Reads ``DATABASE_URL`` from the environment when *database_url* is not
+    supplied.  Passes ``future=True`` (the 2.0 default) explicitly so that
+    the engine behaves consistently regardless of the installed minor version.
+
+    # TODO: Replace any direct ``create_engine()`` calls in your codebase with
+    #       this helper (or inline the same kwargs) to ensure 2.0 semantics.
+    """
+    from sqlalchemy import create_engine
+
+    url = database_url or os.environ.get("DATABASE_URL", "sqlite:///app.db")
+
+    # future=True is the default in 2.0 but being explicit avoids surprises
+    # when running under a mixed 1.4/2.0 environment during migration.
+    kwargs.setdefault("future", True)
+
+    # TODO: For production PostgreSQL, also set:
+    #   pool_pre_ping=True   — detect stale connections
+    #   pool_size=5          — tune to your workload
+    #   max_overflow=10
+    return create_engine(url, **kwargs)
+
+
+def create_session_factory(engine: Any) -> Any:
+    """
+    Return a SQLAlchemy 2.0 ``sessionmaker`` bound to *engine*.
+
+    Usage::
+
+        engine = create_engine_v2()
+        SessionLocal = create_session_factory(engine)
+
+        with SessionLocal() as session:
+            results = session.scalars(select(MyModel)).all()
+
+    # TODO: Replace ``scoped_session(sessionmaker(...))`` patterns (SQLAlchemy
+    #       1.x) with this helper or an equivalent ``sessionmaker`` call.
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    return sessionmaker(bind=engine, autocommit=False, autoflush=False, future=True)
+
+
+# ---------------------------------------------------------------------------
+# 7.  Entrypoint — run a minimal demo when executed directly
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    demo_app = _build_demo_app()
-    port = int(os.environ.get("PORT", 5000))
-    # TODO: Do not use app.run() in production. Use a WSGI server such as
-    # gunicorn or waitress: `gunicorn "migration_shim:_build_demo_app()"`
-    demo_app.run(host="0.0.0.0", port=port, debug=False)
+    # Quick smoke-test: build the app and print the registered routes.
+    demo_app = create_flask_app(
+        raw_config={
+            "DEBUG": True,
+            "SQLALCHEMY_TRACK_MODIFICATIONS": False,  # will be stripped + warned
+            "JSON_SORT_KEYS": True,                   # will be stripped + warned
+        }
+    )
+
+    print("Registered routes:")
+    for rule in sorted(demo_app.url_map.iter_rules(), key=lambda r: r.rule):
+        methods = ",".join(sorted(r.methods - {"HEAD", "OPTIONS"}))
+        print(f"  {methods:10s}  {rule.rule}")
+
+    # TODO: In production, do NOT call app.run() here.
+    #       Use a WSGI server: gunicorn migration_shim:create_flask_app()
+    demo_app.run(host="127.0.0.1", port=5000, debug=True)
