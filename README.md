@@ -74,13 +74,13 @@ The test suite uses **pytest** with fixture-based database isolation. Each test 
 pip install pytest pytest-cov
 
 # Run tests
-pytest
+pytest --cov=src
 
-# Run tests with coverage
-pytest --cov=src --cov-report=term-missing
+# Run tests with verbose output
+pytest -v
 ```
 
-<!-- TODO: Verify that the pytest configuration (pytest.ini or pyproject.toml) is present and that the testpaths, python_files, and python_classes settings match the actual test file locations under src/__tests__/. -->
+> **TODO:** Manual review needed — the service runtime is Node.js/Express but the test suite targets pytest (Python). Confirm the intended language for the test layer and reconcile with the `package.json` Jest configuration if both toolchains are in use.
 
 **Docker**
 
