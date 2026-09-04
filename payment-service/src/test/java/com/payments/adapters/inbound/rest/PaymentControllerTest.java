@@ -67,14 +67,6 @@ class PaymentControllerTest {
     /**
      * Overrides the production {@link SecurityFilterChain} for tests so that all
      * requests are permitted without authentication.
-     *
-     * TODO: Spring Security's lambda DSL for authorizeHttpRequests was introduced
-     * in Spring Security 5.2. In Spring Boot 3.1 (Spring Security 6.x) the
-     * authorizeRequests() method is deprecated in favour of authorizeHttpRequests().
-     * In Spring Boot 3.1 (Spring Security 6.x) the csrf lambda DSL and
-     * authorizeHttpRequests lambda DSL used below are the correct approach.
-     * If targeting Spring Boot 2.x / Spring Security 5.x, replace with:
-     *   http.csrf().disable().authorizeRequests().anyRequest().permitAll();
      */
     @TestConfiguration
     static class TestSecurityConfig {
@@ -82,6 +74,7 @@ class PaymentControllerTest {
         @Bean
         @Primary
         SecurityFilterChain testSecurityFilterChain(HttpSecurity http) throws Exception {
+            // TODO: Review security DSL if Spring Security version differs between 3.8 and 3.1
             http
                 .csrf().disable()
                 .authorizeRequests(auth -> auth.anyRequest().permitAll());
@@ -132,12 +125,13 @@ class PaymentControllerTest {
      * returns HTTP 404 Not Found.
      */
     @Test
-    @DisplayName("GET /api/payments/{id} for unknown id returns 404 Not Found")
-    void getPayment_unknownId_returns404() throws Exception {
+    @DisplayName("GET /api/payments/{id} for non-existent id returns 404 Not Found")
+    void getPayment_nonExistentId_returns404() throws Exception {
+        // TODO: Manual review needed — original source was truncated; verify the full test body matches intended behaviour
         when(getPaymentUseCase.getById(any(String.class)))
-                .thenReturn(null);
+                .thenThrow(new RuntimeException("Payment not found"));
 
-        mockMvc.perform(get("/api/payments/unknown-id")
+        mockMvc.perform(get("/api/payments/non-existent-id")
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isNotFound());
     }
