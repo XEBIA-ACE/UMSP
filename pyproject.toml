@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "umsp"
+version = "0.2.0"
+description = "UMSP service (Flask 3.x)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "Flask>=3.1,<4",
+    "Werkzeug>=3.1,<4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "flake8>=7.0"]
+
+[tool.setuptools.packages.find]
+include = ["umsp*"]
+
+[tool.setuptools.package-data]
+umsp = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["*Test.py", "test_*.py"]
+filterwarnings = ["error::DeprecationWarning"]
