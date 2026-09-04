@@ -2,86 +2,114 @@
 
 ## Summary
 
-This spec covers the configuration of a GitHub Actions CI pipeline to automate lint checks, test execution, and security scanning for the repository. The expected outcome is a repeatable, automated quality gate that runs on every pull request and push to the main branch, providing fast feedback on code quality, correctness, and known vulnerabilities before changes are merged.
+This spec covers the creation and configuration of a GitHub Actions CI pipeline for the `user-payment-service` monorepo. The pipeline will enforce code quality (linting), execute automated test suites, and run security scans across both the Node.js 20 / Express 4 `user-management` service and the Java 21 / Spring Boot 3.x `payment-service`. The expected outcome is a fully automated CI workflow that runs on every pull request and push to the main branch, blocking merges on lint failures, test failures, or detected security vulnerabilities.
 
 ## Motivation
 
-Currently there is no documented automated CI pipeline in place. The absence of a standardized CI pipeline introduces the following risks:
-
-- **Code quality drift:** Without automated linting, style and correctness issues accumulate across contributions.
-- **Regression risk:** Without automated test execution on every change, regressions may reach the main branch undetected.
-- **Security exposure:** Without automated security scanning, dependency vulnerabilities and code-level security issues may go unnoticed until exploitation or manual audit.
-- **Upgrade urgency:** Medium — the lack of CI is classified as tech debt that blocks safe, confident modernization of other components in this repository.
-
-Establishing this pipeline is a prerequisite for any further modernization work, as subsequent upgrades will rely on CI to validate changes.
+- **No existing CI enforcement:** The repository contains two production services with test suites (Jest + Supertest for Node.js; JUnit 5 + Mockito + Testcontainers for Java) but no automated pipeline to run them on code changes. Defects and regressions can merge undetected.
+- **Security posture:** Both services handle authentication (JWT, OAuth2), payment processing (Stripe, PayPal), and sensitive user data. Without automated dependency auditing and SAST scanning, known CVEs in dependencies (e.g., `jsonwebtoken ^9.0.2`, `express ^4.18.2`, Spring Boot 3.x transitive dependencies) may go unnoticed.
+- **Code quality consistency:** ESLint and Prettier configuration files (`.eslintrc.js`, `.prettierrc`) exist in the `gateway/` layer and the `user-management` service but are not enforced automatically. Java code style is similarly unenforced in CI.
+- **Upgrade urgency:** Medium. Services are in active development; establishing CI gates now prevents accumulation of quality and security debt before the codebase grows further.
+- **Compliance readiness:** Payment processing integrations (Stripe, PayPal) and OAuth2 token handling require demonstrable security controls; automated scanning supports audit evidence.
 
 ## Current State
 
-- No GitHub Actions workflow files are present in the repository (or none are confirmed to exist).
-- Lint, test, and security scan steps are not currently enforced automatically on pull requests or pushes.
-- The specific language, runtime, build tool, and frameworks in use are not confirmed in the provided context (marked as unknown).
-- There are no existing branch protection rules tied to CI status checks confirmed in context.
+The repository structure defines two workflow file placeholders under `.github/workflows/` but no implemented pipeline content is present in the provided context:
 
-> **Note:** Because language, runtime, and build tool are listed as unknown in the tech analysis, specific tool names (e.g., linter binary, test runner, scanner tool) cannot be confirmed at this time. See Open Questions.
+| File | Current State |
+|---|---|
+| `.github/workflows/ci.yml` | Placeholder — no implemented content provided |
+| `.github/workflows/security-scan.yml` | Placeholder — no implemented content provided |
+
+**Node.js service (`user-management`):**
+- Runtime: Node.js 20 LTS
+- Package manager: npm (with `package-lock.json`)
+- Test runner: Jest 29.7.0 with coverage (`npm test` → `jest --coverage`)
+- Test location: `user-management/src/__tests__/**/*.test.js`
+- Lint config: `.eslintrc.js` (referenced in `gateway/`; TODO: confirm presence in `user-management/`)
+- Formatter config: `.prettierrc`
+- Key test files: `health.test.js`, `loginUser.test.js`, `registerUser.test.js`
+
+**Java service (`payment-service`):**
+- Runtime: Java 21 LTS (AGENTS.md); README.md states Java 17 — **see Open Questions**
+- Build tool: Maven (Maven Wrapper `./mvnw` referenced in README)
+- Test runner: JUnit 5 + Mockito; integration tests use Testcontainers
+- Test command: `./mvnw test`
+- Key test files: `HealthControllerTest.java`, `PaymentControllerTest.java`, `PaymentApplicationServiceTest.java`
+- Spring Boot version: 3.x (AGENTS.md) / 3.2 (README.md)
+
+**Docker:**
+- `docker-compose.yml` and `docker-compose.test.yml` exist for local and test environments
+- Both services have `Dockerfile`s
+
+**Security tooling:** No existing SAST or dependency audit tooling is configured in CI.
 
 ## Proposed Changes
 
-For each of the three pipeline stages, the following changes are introduced:
-
 | Component | Before | After | Breaking? |
 |---|---|---|---|
-| Lint stage | Not automated; no enforcement | Automated lint check runs on every PR and push to main | N |
-| Test stage | Not automated; no enforcement | Automated test suite execution runs on every PR and push to main | N |
-| Security scan stage | Not automated; no enforcement | Automated dependency and/or code security scan runs on every PR and push to main | N |
-| Branch protection | Not tied to CI status | PR merge blocked unless all three CI stages pass | N — additive change |
-| GitHub Actions workflow | Does not exist | New workflow file(s) added to the repository | N |
-
-**What is added:**
-- A GitHub Actions workflow triggered on `pull_request` and `push` to the main branch.
-- A lint job that fails the pipeline on lint errors.
-- A test job that fails the pipeline on test failures.
-- A security scan job that fails the pipeline (or produces a report) on detected vulnerabilities above a defined severity threshold.
-
-**What is removed:**
-- Nothing is removed. This is a net-new addition.
+| `.github/workflows/ci.yml` | Empty placeholder | Implemented workflow: Node.js lint + test job; Java build + test job; triggered on push and pull_request to main | N |
+| `.github/workflows/security-scan.yml` | Empty placeholder | Implemented workflow: npm audit for Node.js; OWASP Dependency-Check or Maven dependency audit for Java; CodeQL or equivalent SAST scan | N |
+| Node.js lint step | Not enforced in CI | ESLint run against `user-management/` source; Prettier format check | N |
+| Node.js test step | Manual only | `npm ci` + `npm test` (Jest with coverage) executed in CI on Node.js 20 | N |
+| Java build + test step | Manual only | `./mvnw verify` (compiles, runs unit and integration tests) executed in CI on Java 21 | N |
+| Coverage reporting | Not collected in CI | Jest coverage report and JaCoCo (or Maven Surefire) report uploaded as CI artifacts | N |
+| Dependency audit (Node.js) | Not automated | `npm audit` with configurable severity threshold | N |
+| Dependency audit (Java) | Not automated | Maven dependency vulnerability check (OWASP Dependency-Check plugin or equivalent) | N |
+| SAST scan | Not present | GitHub CodeQL analysis or equivalent, covering JavaScript and Java | N |
+| CI trigger | None | Push to `main`/`master`; all pull requests targeting `main`/`master` | N |
 
 ## Compatibility & Breaking Changes
 
-| Change | Impact | Migration Path |
+No breaking changes are introduced. The CI pipeline is additive infrastructure. The following migration notes apply to contributors:
+
+| Change | Impact on Callers | Migration Path |
 |---|---|---|
-| Branch protection rules requiring CI to pass | PRs that previously could be merged without checks will now require all three jobs to pass | Contributors must ensure their branches pass lint, tests, and security scan before merge; existing open PRs may need to be rebased or updated |
-| Security scan severity threshold | PRs introducing dependencies with vulnerabilities above the threshold will be blocked | TODO — threshold level (e.g., HIGH, CRITICAL) must be agreed upon by the team before enforcement is enabled |
-| Lint rule enforcement | Existing code that does not conform to lint rules may cause the lint job to fail on first run | TODO — decision needed on whether to apply lint rules strictly from day one or introduce a grace period / baseline suppression for pre-existing issues |
+| Lint enforcement on PRs | PRs with ESLint violations will fail CI | Fix lint errors locally before pushing; run ESLint against `user-management/` source |
+| Test gate on PRs | PRs with failing Jest or JUnit tests will be blocked | All existing tests must pass; new code must include passing tests |
+| `npm ci` replaces `npm install` in CI | Requires committed `package-lock.json` | `package-lock.json` is already present; no action needed |
+| Security scan on PRs | PRs introducing high/critical CVEs may be flagged | Review and remediate flagged dependencies; severity threshold policy TODO — see Open Questions |
+| Java version pinned in CI | Builds will fail if source is incompatible with pinned JDK | Resolve Java 17 vs. Java 21 discrepancy first (see Open Questions) |
 
 ## Acceptance Criteria
 
-1. **Given** a pull request is opened against the main branch, **when** the PR is created or updated, **then** the GitHub Actions workflow is automatically triggered within 2 minutes.
+1. **Given** a pull request is opened against the main branch, **when** the CI workflow triggers, **then** the `ci.yml` workflow runs and its status is reported on the pull request within GitHub's checks UI.
 
-2. **Given** the CI workflow is triggered, **when** the lint job runs, **then** it exits with a non-zero status code if any lint errors are present, causing the overall workflow to fail.
+2. **Given** the Node.js CI job runs, **when** `npm ci` executes in the `user-management/` directory, **then** all dependencies install without error using the committed `package-lock.json`.
 
-3. **Given** the CI workflow is triggered, **when** the test job runs, **then** it executes the full test suite and exits with a non-zero status code if any tests fail, causing the overall workflow to fail.
+3. **Given** the Node.js CI job runs, **when** ESLint is executed against the `user-management/src/` directory, **then** the step exits with code 0 when no lint violations are present, and exits with a non-zero code when violations exist.
 
-4. **Given** the CI workflow is triggered, **when** the security scan job runs, **then** it scans dependencies and/or code for known vulnerabilities and exits with a non-zero status code (or posts a blocking status check) if vulnerabilities at or above the agreed severity threshold are detected.
+4. **Given** the Node.js CI job runs, **when** `npm test` executes, **then** all Jest tests in `user-management/src/__tests__/` pass (including `health.test.js`, `loginUser.test.js`, `registerUser.test.js`) and the job exits with code 0.
 
-5. **Given** all three jobs (lint, test, security scan) pass, **when** a reviewer attempts to merge the pull request, **then** the merge is permitted by branch protection rules.
+5. **Given** a test in `user-management/src/__tests__/` is intentionally broken, **when** the CI pipeline runs, **then** the Node.js test job fails and the pull request check is marked as failed.
 
-6. **Given** any one of the three jobs (lint, test, or security scan) fails, **when** a reviewer attempts to merge the pull request, **then** the merge is blocked by branch protection rules until the failure is resolved.
+6. **Given** the Java CI job runs, **when** `./mvnw verify` executes in the `payment-service/` directory with the correct JDK version, **then** all JUnit 5 tests (including `HealthControllerTest`, `PaymentControllerTest`, `PaymentApplicationServiceTest`) pass and the job exits with code 0.
 
-7. **Given** a push is made directly to the main branch, **when** the push completes, **then** the CI workflow is triggered and all three jobs execute.
+7. **Given** a JUnit test in `payment-service/` is intentionally broken, **when** the CI pipeline runs, **then** the Java test job fails and the pull request check is marked as failed.
 
-8. **Given** the CI workflow completes (pass or fail), **when** a contributor views the pull request, **then** the status of each individual job (lint, test, security scan) is visible as a separate named status check on the PR.
+8. **Given** the CI pipeline completes successfully, **when** the workflow run is inspected, **then** Jest coverage output and Maven Surefire/JaCoCo reports are available as downloadable artifacts on the workflow run.
 
-9. **Given** the security scan job runs, **when** vulnerabilities are detected below the blocking threshold, **then** the job passes but a summary report of findings is available in the workflow run output.
+9. **Given** the security scan workflow runs, **when** `npm audit` executes against `user-management/` dependencies, **then** the step fails if any dependency has a vulnerability at or above the configured severity threshold (TODO: threshold to be confirmed — see Open Questions).
+
+10. **Given** the security scan workflow runs, **when** the Java dependency vulnerability check executes against `payment-service/pom.xml`, **then** the step fails if any dependency has a known CVE at or above the configured severity threshold.
+
+11. **Given** the SAST scan runs via CodeQL (or equivalent), **when** it analyses JavaScript source in `user-management/` and Java source in `payment-service/`, **then** results are published to the GitHub Security tab and the workflow step completes without infrastructure error.
+
+12. **Given** a push is made directly to the main branch, **when** the CI and security scan workflows trigger, **then** both workflows execute all jobs end-to-end without configuration errors.
+
+13. **Given** the CI pipeline runs, **when** no secrets (`JWT_SECRET`, `STRIPE_API_KEY`, `PAYPAL_CLIENT_SECRET`, etc.) are present in the environment, **then** tests that do not require live external services still pass (unit tests and mocked integration tests must not require real credentials).
 
 ## Open Questions
 
 | # | Question | Owner | Due Date |
 |---|---|---|---|
-| 1 | What is the primary language and runtime for this repository? This determines which lint tool, test runner, and security scanner to use. | TODO | TODO |
-| 2 | What build tool is in use (e.g., Make, npm, Gradle, Poetry)? This determines how lint, test, and scan commands are invoked. | TODO | TODO |
-| 3 | What security scanning tool should be used (e.g., GitHub Dependabot, Trivy, Snyk, OWASP Dependency-Check, CodeQL)? | TODO | TODO |
-| 4 | What vulnerability severity threshold should block a PR merge (e.g., CRITICAL only, HIGH and above)? | TODO | TODO |
-| 5 | Should pre-existing lint violations in the codebase block the pipeline immediately, or should a baseline suppression file be introduced for a grace period? | TODO | TODO |
-| 6 | Which branch is the protected main branch (e.g., `main`, `master`, `develop`)? | TODO | TODO |
-| 7 | Are there any self-hosted runner requirements, or will GitHub-hosted runners be used? | TODO | TODO |
-| 8 | Should the security scan job produce a blocking failure or a non-blocking advisory report on first rollout, with blocking enforcement added later? | TODO | TODO |
+| 1 | Java runtime version discrepancy: AGENTS.md specifies Java 21 LTS; README.md states Java 17. Which version should be pinned in the CI workflow matrix? | TODO | TODO |
+| 2 | Spring Boot version discrepancy: AGENTS.md states Spring Boot 3.x; README.md states Spring Boot 3.2. Should the CI workflow pin a specific patch version for reproducibility? | TODO | TODO |
+| 3 | Does an `.eslintrc.js` file exist in `user-management/` (separate from `gateway/.eslintrc.js`), or should the gateway config be extended/shared? | TODO | TODO |
+| 4 | What is the minimum severity threshold for `npm audit` and the Java dependency scan to fail the build (low / moderate / high / critical)? | TODO | TODO |
+| 5 | Should the security scan run on every PR, on a scheduled cron, or both? | TODO | TODO |
+| 6 | Do Testcontainers-based integration tests in `payment-service/` require Docker-in-Docker in the CI runner, or is the GitHub Actions hosted runner environment sufficient? | TODO | TODO |
+| 7 | Are there required secrets (e.g., `STRIPE_API_KEY`, `OAUTH2_ISSUER_URI`) that must be configured as GitHub Actions repository secrets for any CI test to pass, or are all tests fully mocked? | TODO | TODO |
+| 8 | Should CI enforce a minimum code coverage threshold (e.g., fail if Jest coverage drops below X%)? If yes, what is the threshold? | TODO | TODO |
+| 9 | Which SAST tool is preferred: GitHub CodeQL (free for public repos), or a third-party tool (e.g., Snyk, SonarCloud)? | TODO | TODO |
+| 10 | Should the `gateway/` Node.js layer have its own CI job separate from `user-management/`, given it has its own `package.json` and test config? | TODO | TODO |
