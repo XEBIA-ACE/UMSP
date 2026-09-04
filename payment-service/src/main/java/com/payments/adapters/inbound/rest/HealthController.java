@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -38,11 +39,12 @@ public class HealthController {
      */
     @GetMapping
     public ResponseEntity<Map<String, String>> health() {
-        Map<String, String> body = Map.of(
-                "status", "ok",
-                "service", "payment-service",
-                "timestamp", Instant.now().toString()
-        );
+        // TODO: Map.of() is available in Java 9+; retained as-is since Java 17 is still the target runtime.
+        // Spring Boot 3.1 (vs 3.2) does not affect this controller's logic.
+        Map<String, String> body = new HashMap<>();
+        body.put("status", "ok");
+        body.put("service", "payment-service");
+        body.put("timestamp", Instant.now().toString());
         return ResponseEntity.ok(body);
     }
 }
