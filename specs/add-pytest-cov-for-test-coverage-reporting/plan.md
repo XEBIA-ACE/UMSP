@@ -4,18 +4,15 @@
 
 **Migration strategy: Big-bang (single-phase, low-risk addition)**
 
-The task is a narrow, additive change: introduce `pytest-cov` as a development dependency in the `user-management` Node.js service's test toolchain. No existing code is deleted, no APIs are modified, and no runtime behaviour changes.
+The task is a narrow, additive change: introduce `pytest-cov` as a development dependency in the `user-management` Node.js service's test toolchain. No existing code is modified, no APIs change, and no infrastructure is restructured.
 
-However, a critical observation from the code context must be stated upfront: **the `user-management` service uses Jest (not pytest)**. `pytest-cov` is a Python tool; it has no applicability to a Node.js/Jest project. The existing `package.json` already configures Jest with `--coverage` and a `coverageDirectory` of `coverage`, meaning **coverage reporting is already functional via Jest's built-in V8/Istanbul coverage**.
+However, a critical observation from the code context must be stated upfront: **the `user-management` service uses Jest (not pytest)**. `pytest-cov` is a Python tool; it has no applicability to a Node.js/Jest project. The existing `package.json` already configures Jest with `--coverage` and a `coverageDirectory`/`collectCoverageFrom` block, meaning **coverage reporting is already functional via `jest --coverage`**.
 
-Given the stated goal is "add pytest-cov for test coverage reporting" and the only test-bearing service with a visible package manifest is the Node.js `user-management` service (which uses Jest), this plan covers:
+This plan therefore covers two interpretations:
+1. **Literal interpretation**: Add `pytest-cov` — not applicable to this stack; documented as a no-op with rationale.
+2. **Intent interpretation**: Improve/formalise Jest-based coverage reporting in `user-management` — the actionable path, scoped to what the existing codebase supports.
 
-1. Confirming and formalising the existing Jest coverage configuration.
-2. Adding `@jest/coverage-provider` or `jest-coverage-thresholds` if stricter enforcement is needed — the closest Jest-native equivalent to what `pytest-cov` provides in Python projects.
-
-If a Python service exists in this monorepo but is absent from the provided context, the infrastructure for it is marked **TODO**.
-
-Risk score: **Low**. Effort estimate: **< 1 person-day**.
+The risk score is low and effort is minimal (< 1 person-day). A big-bang approach (single PR, no feature flag, no parallel run) is appropriate.
 
 ---
 
@@ -23,10 +20,12 @@ Risk score: **Low**. Effort estimate: **< 1 person-day**.
 
 | Phase | Description | Dependencies | Estimated Effort |
 |-------|-------------|--------------|-----------------|
-| 1 | Audit existing Jest coverage config in `user-management/package.json`; confirm `--coverage` flag is present in `test` script | None | 0.1 person-days |
-| 2 | Add coverage thresholds to `jest` config block in `package.json`; add `coverageReporters` for lcov + text-summary output | Phase 1 complete | 0.2 person-days |
-| 3 | Update CI pipeline to fail on coverage gate and publish HTML/lcov report as artifact | Phase 2 complete | 0.2 person-days |
-| 4 | TODO — If a Python service is identified in the monorepo, install `pytest-cov` there and configure `pytest.ini` / `pyproject.toml` | Python service context required | TODO |
+| 1 | Verify existing Jest coverage config in `user-management/package.json` and confirm it is complete | None | 0.1 person-days |
+| 2 | Add `@jest/coverage-provider` or `jest-coverage-thresholds` config if coverage gates are absent; update `package.json` jest config block | Phase 1 complete | 0.2 person-days |
+| 3 | Update CI pipeline to fail on coverage below threshold and publish coverage artifact | Phase 2 complete | 0.2 person-days |
+| 4 | Update `README.md` to document coverage command and threshold | Phase 3 complete | 0.1 person-days |
+
+> **Note on `pytest-cov`**: This package is a pytest plugin for Python projects. The `user-management` service is Node.js 20 / Jest 29. The `payment-service` is Java 17 / Spring Boot with JUnit 5 — also not Python. There is no Python runtime, `requirements.txt`, `setup.py`, `pyproject.toml`, or `pytest` configuration anywhere in the provided context. Installing `pytest-cov` would have no effect on either service. If a Python service exists outside the provided context, mark its location as TODO and apply this plan there instead.
 
 ---
 
@@ -34,13 +33,14 @@ Risk score: **Low**. Effort estimate: **< 1 person-day**.
 
 ### `user-management/package.json`
 
-**What changes:** The `jest` configuration block gains `coverageThreshold` and an explicit `coverageReporters` list. No structural changes to source files.
+**What changes**: The `jest` configuration block already contains `"coverageDirectory": "coverage"` and `"collectCoverageFrom"`. The following additions formalise coverage enforcement:
 
-**Current state (from context):**
+- Add `coverageThreshold` to the `jest` config key to enforce minimum coverage gates.
+- Add `coverageReporters` to emit both human-readable (`text`, `lcov`) and machine-readable (`json-summary`) formats for CI consumption.
+- No new runtime dependencies are required; `jest --coverage` uses V8 or Babel coverage built into Jest 29.
+
+**Current `jest` block** (from `user-management/package.json`):
 ```json
-"scripts": {
-  "test": "jest --coverage"
-},
 "jest": {
   "testEnvironment": "node",
   "testMatch": ["**/src/__tests__/**/*.test.js"],
@@ -52,11 +52,8 @@ Risk score: **Low**. Effort estimate: **< 1 person-day**.
 }
 ```
 
-**Target state:**
+**Target `jest` block**:
 ```json
-"scripts": {
-  "test": "jest --coverage"
-},
 "jest": {
   "testEnvironment": "node",
   "testMatch": ["**/src/__tests__/**/*.test.js"],
@@ -65,41 +62,40 @@ Risk score: **Low**. Effort estimate: **< 1 person-day**.
     "src/**/*.js",
     "!src/__tests__/**"
   ],
-  "coverageReporters": ["text-summary", "lcov", "html"],
+  "coverageReporters": ["text", "lcov", "json-summary"],
   "coverageThreshold": {
     "global": {
-      "branches": 80,
-      "functions": 80,
       "lines": 80,
+      "functions": 80,
+      "branches": 70,
       "statements": 80
     }
   }
 }
 ```
 
-**Files affected:**
+**Files affected**:
 - `user-management/package.json` — `jest` config block only
 
-**APIs/methods affected:** None. The following test files are already covered by `collectCoverageFrom` and require no changes:
-- `user-management/src/__tests__/health.test.js`
-- `user-management/src/__tests__/loginUser.test.js`
-- `user-management/src/__tests__/registerUser.test.js`
+**APIs modified**: None. The `npm test` script (`jest --coverage`) is unchanged.
 
-Source files instrumented (no changes needed):
-- `user-management/src/application/usecases/RecoverPassword.js`
-- `user-management/src/application/usecases/RegisterUser.js`
-- `user-management/src/adapters/inbound/http/controllers/AuthController.js`
-- `user-management/src/adapters/inbound/http/routes/authRoutes.js`
-- `user-management/src/adapters/outbound/auth/JwtAuthAdapter.js`
-- `user-management/src/adapters/outbound/persistence/InMemoryUserRepository.js`
+---
 
-### Python service (if present)
+### `user-management` — No source file changes
 
-**TODO** — No Python service, `requirements.txt`, `pyproject.toml`, or `pytest.ini` is present in the provided context. If a Python service exists, the following changes would apply:
+No changes to:
+- `src/application/usecases/RecoverPassword.js`
+- `src/application/usecases/RegisterUser.js`
+- `src/adapters/inbound/http/controllers/AuthController.js`
+- `src/adapters/outbound/persistence/InMemoryUserRepository.js`
+- `src/adapters/outbound/auth/JwtAuthAdapter.js`
+- Any `src/__tests__/*.test.js` file
 
-- Add `pytest-cov` to `requirements-dev.txt` or `pyproject.toml` `[dev-dependencies]`
-- Add `pytest.ini` or `[tool.pytest.ini_options]` section with `--cov` flags
-- TODO: identify service root directory
+---
+
+### `payment-service` — No changes
+
+The `payment-service` is Java/Spring Boot with JUnit 5 and Mockito. Coverage is handled by JaCoCo (standard for Maven/Spring Boot projects). `pytest-cov` does not apply. No changes to any file under `payment-service/`.
 
 ---
 
@@ -107,10 +103,10 @@ Source files instrumented (no changes needed):
 
 | Dependency | Current Version | Target Version | Breaking Changes | Migration Notes |
 |------------|----------------|----------------|-----------------|-----------------|
-| `jest` (devDependency) | `^29.7.0` | `^29.7.0` (no change) | None | Already installed; coverage is built-in via `jest --coverage` |
-| `pytest-cov` | N/A (not present) | TODO — version not determinable from provided tech analysis | N/A | Only applicable if a Python service exists in this monorepo; not present in provided context |
+| `jest` (devDependency) | `^29.7.0` | `^29.7.0` (no change) | None | Coverage is built into Jest 29 via `--coverage` flag; no additional package needed |
+| `pytest-cov` | N/A (not present) | N/A | N/A | **Not applicable** — no Python runtime exists in this codebase. Do not install. |
 
-> **Note:** The tech analysis does not specify a `pytest-cov` version. No version number is invented here per the rules. If a Python service is confirmed, the target version must be sourced from a fresh `pip install pytest-cov` resolution against the Python runtime version in use.
+> All version numbers sourced from `user-management/package.json` as provided in context. No training-data version guesses used.
 
 ---
 
@@ -118,79 +114,79 @@ Source files instrumented (no changes needed):
 
 ### CI/CD Pipeline (`.github/workflows/ci.yml`)
 
-The `AGENTS.md` confirms a GitHub Actions CI pipeline exists at `.github/workflows/ci.yml`. The file content is not provided, so changes are described by intent:
+The `AGENTS.md` references a `.github/workflows/ci.yml` file. Its contents are not provided in context.
 
-**Add to the `user-management` test job:**
+**Required change** (add to the Node.js test step):
+- Ensure the `npm test` step in the `user-management` job runs `jest --coverage` (already the case per `package.json` `"test"` script).
+- Add a step to upload the `user-management/coverage/lcov.info` artifact for downstream reporting (e.g., Codecov, Coveralls, or GitHub Actions artifact upload).
+- The CI gate will automatically fail if `coverageThreshold` is not met, because Jest exits with a non-zero code.
+
+**Example addition to CI workflow** (exact YAML keys depend on existing `ci.yml` structure — TODO: verify step names):
 ```yaml
-- name: Run tests with coverage
-  working-directory: user-management
-  run: npm test
-
 - name: Upload coverage report
   uses: actions/upload-artifact@v4
   with:
     name: user-management-coverage
-    path: user-management/coverage/
+    path: user-management/coverage/lcov.info
 ```
 
-The `coverageThreshold` block in `package.json` will cause `jest --coverage` to exit non-zero if thresholds are not met, automatically failing the CI job — no additional CI gate configuration is required.
+**Docker**: No changes. Coverage is a dev/CI concern only; the `Dockerfile` for `user-management` does not run tests.
 
-**Docker base image:** No change. Coverage reporting is a dev/CI-only concern; the `Dockerfile` for `user-management` is not affected.
+**Kubernetes manifests**: N/A — not applicable to this task.
 
-**Kubernetes manifests:** N/A — not applicable to this task.
-
-**IaC:** TODO — no IaC files are present in the provided context.
+**IaC**: TODO — no IaC files provided in context.
 
 ---
 
 ## Rollback Strategy
 
-### Phase 1 (Audit) — Rollback
+### Phase 1 (Verification)
 - No changes made; nothing to roll back.
 
-### Phase 2 (Jest config changes) — Rollback
-- Revert `user-management/package.json` to remove the `coverageThreshold` and `coverageReporters` keys added to the `jest` block.
-- The `test` script (`jest --coverage`) remains unchanged and continues to work.
-- Single-command rollback: `git revert <commit-sha>` targeting only `user-management/package.json`.
+### Phase 2 (`package.json` jest config update)
+- Revert `user-management/package.json` to remove `coverageReporters` and `coverageThreshold` keys from the `jest` block.
+- Run `npm test` to confirm tests pass without threshold enforcement.
+- This is a single-file, single-key revert; independently reversible via `git revert` or manual edit.
 
-### Phase 3 (CI pipeline changes) — Rollback
-- Remove the `Upload coverage report` step from `.github/workflows/ci.yml`.
-- The test job continues to run; it simply will not upload the artifact.
-- Single-command rollback: `git revert <commit-sha>` targeting only `.github/workflows/ci.yml`.
+### Phase 3 (CI pipeline update)
+- Remove the `upload-artifact` step from `.github/workflows/ci.yml`.
+- If a coverage gate step was added, remove it.
+- Push the revert commit; CI will return to its prior behaviour.
 
-### Phase 4 (Python service — TODO)
-- TODO — rollback steps depend on the Python service structure, which is absent from context.
+### Phase 4 (README update)
+- Revert documentation changes to `README.md` via `git revert` or manual edit.
+- No functional impact.
 
 ---
 
 ## Testing Strategy
 
-### Unit tests
-- **Tool:** Jest `^29.7.0` (already installed)
-- **Scope:** All files matching `user-management/src/__tests__/**/*.test.js`
-- **Current tests confirmed in context:** `loginUser.test.js`, `registerUser.test.js`, `health.test.js`
-- **Coverage target:** 80% lines / branches / functions / statements (enforced via `coverageThreshold`)
-- **Run:** `npm test` from `user-management/`
+### Unit tests (existing — no change required)
+- **Tool**: Jest 29 (`jest ^29.7.0`)
+- **Files**: `user-management/src/__tests__/loginUser.test.js`, `registerUser.test.js`
+- **Coverage target**: ≥ 80% lines/functions/statements, ≥ 70% branches (enforced via `coverageThreshold`)
+- **Run**: `npm test` (executes `jest --coverage`)
 
-### Integration tests
-- **Tool:** Jest + Supertest `^6.3.3` (already installed)
-- **Scope:** `health.test.js` exercises `createApp()` end-to-end via HTTP
-- **Coverage contribution:** Covers `AuthController`, route wiring, and `createApp` infrastructure path
+### Integration tests (existing — no change required)
+- **Tool**: Jest 29 + Supertest (`supertest ^6.3.3`)
+- **Files**: `user-management/src/__tests__/health.test.js`
+- **Coverage target**: Included in the global threshold above via `collectCoverageFrom: ["src/**/*.js"]`
 
-### Regression tests
-- Existing test suite acts as regression suite. No new test files are required for this task.
-- CI gate: `jest --coverage` exit code non-zero on threshold breach blocks merge.
+### Regression
+- The existing test suite serves as the regression baseline.
+- No new test files are required for this task.
+- CI gate: `npm test` must exit 0 (Jest fails the process if thresholds are not met).
 
-### Performance tests
-- N/A — not applicable to this task. Coverage instrumentation adds negligible overhead to a Jest run.
+### Performance
+- N/A — coverage instrumentation adds negligible overhead to a small Node.js test suite of this size.
 
 ### CI gate summary
-| Gate | Tool | Threshold | Blocks merge? |
-|------|------|-----------|---------------|
-| Unit + integration pass | Jest | 0 failures | Yes |
-| Line coverage | Jest `coverageThreshold` | ≥ 80% | Yes |
-| Branch coverage | Jest `coverageThreshold` | ≥ 80% | Yes |
-| Coverage artifact upload | GitHub Actions `upload-artifact` | N/A | No (informational) |
+| Gate | Tool | Pass Condition |
+|------|------|---------------|
+| Unit + integration tests pass | Jest 29 | Exit code 0 |
+| Line coverage ≥ 80% | Jest `coverageThreshold` | Enforced by Jest; non-zero exit on failure |
+| Branch coverage ≥ 70% | Jest `coverageThreshold` | Enforced by Jest; non-zero exit on failure |
+| Coverage artifact uploaded | GitHub Actions | `lcov.info` present in artifact store |
 
 ---
 
@@ -198,7 +194,9 @@ The `coverageThreshold` block in `package.json` will cause `jest --coverage` to 
 
 | Milestone | Phase | Estimated Completion | Owner |
 |-----------|-------|---------------------|-------|
-| Audit existing Jest coverage config | Phase 1 | Day 1 (0.1 pd) | TODO |
-| Add `coverageThreshold` + `coverageReporters` to `package.json` | Phase 2 | Day 1 (0.3 pd total) | TODO |
-| Update `.github/workflows/ci.yml` to upload coverage artifact | Phase 3 | Day 1 (0.5 pd total) | TODO |
-| Python service `pytest-cov` integration (if applicable) | Phase 4 | TODO — blocked on Python service context | TODO |
+| Confirm Jest coverage already functional; document pytest-cov inapplicability | Phase 1 | Day 1 | TODO |
+| Update `user-management/package.json` jest config with thresholds and reporters | Phase 2 | Day 1 | TODO |
+| Update `.github/workflows/ci.yml` to upload coverage artifact | Phase 3 | Day 1 | TODO |
+| Update `README.md` with coverage documentation | Phase 4 | Day 1 | TODO |
+
+> Total estimated effort: ~0.5–0.6 person-days. All phases can be completed in a single working session and delivered as one pull request.
