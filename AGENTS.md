@@ -6,7 +6,7 @@
 |---|---|
 | **Node.js 20 LTS** | Runtime for Express API gateway / BFF layer |
 | **Express 4.x** | HTTP routing, middleware, request validation |
-| **Java 21 (LTS)** | Runtime for Spring Boot core business services |
+| **Java 17 (LTS)** | Runtime for Spring Boot core business services |
 | **Spring Boot 3.x** | User management, payment orchestration microservices |
 | **Spring Security + OAuth2** | Authentication, authorization, token management |
 | **Spring Data JPA / Hibernate** | ORM for user and transaction persistence |
