@@ -118,6 +118,18 @@ class InMemoryUserRepository extends UserRepositoryPort {
     }
     return null;
   }
+
+  /**
+   * Clears all entries from the store.
+   * Intended for use in test fixtures to provide per-test isolation.
+   * TODO: Review usage in pytest fixtures — call this in a function-scoped
+   * fixture's teardown (yield-based) to reset state between tests.
+   *
+   * @returns {void}
+   */
+  clear() {
+    this._store.clear();
+  }
 }
 
 module.exports = InMemoryUserRepository;
