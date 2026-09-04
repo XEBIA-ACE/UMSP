@@ -2,7 +2,6 @@ package com.payments.infrastructure.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -38,27 +37,26 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             // Disable CSRF – not needed for stateless REST APIs
-            .csrf(csrf -> csrf.disable())
+            .csrf().disable()
 
             // Define authorisation rules
             .authorizeHttpRequests(auth -> auth
                 // Health endpoint is public (no authentication required)
-                .requestMatchers("/api/health/**").permitAll()
+                .antMatchers("/api/health/**").permitAll()
                 // All payment endpoints require a valid JWT
-                .requestMatchers("/api/payments/**").authenticated()
+                .antMatchers("/api/payments/**").authenticated()
                 // Deny everything else by default
                 .anyRequest().denyAll()
             )
 
             // Stateless session – no HttpSession will be created
-            .sessionManagement(session ->
-                session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-            )
+            .sessionManagement()
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+            .and()
 
             // OAuth2 resource server with JWT bearer token validation
-            .oauth2ResourceServer(oauth2 ->
-                oauth2.jwt(Customizer.withDefaults())
-            );
+            .oauth2ResourceServer()
+                .jwt();
 
         return http.build();
     }
