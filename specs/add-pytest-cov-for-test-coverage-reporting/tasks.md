@@ -1,52 +1,52 @@
 # Tasks: Add pytest-cov for Test Coverage Reporting
 
-> **Scope:** `user-management` service only. The source code confirms this is a Node.js 20 / Jest project (`user-management/package.json`). `pytest-cov` is a Python tool; the actual requirement is **Jest coverage reporting**, which is already partially wired (`"test": "jest --coverage"` exists in `package.json`). All tasks below address completing and formalising Jest-based coverage reporting for the `user-management` service. The `payment-service` (Java/JUnit 5) is out of scope — no Python runtime is present in the provided tech analysis.
+> **Scope:** `user-management` service only. The source code confirms this is a Node.js 20 / Jest project (`user-management/package.json`). `pytest-cov` is a Python tool; the actual requirement is **Jest coverage reporting**, which is already partially configured in `package.json` (`"test": "jest --coverage"`, `coverageDirectory`, `collectCoverageFrom`). Tasks below complete and harden that coverage setup. The `payment-service` (Java/JUnit 5) is out of scope — no Python runtime is present in the provided context.
 
 ---
 
 ## Prerequisites
 
-- [ ] [XS] Confirm Node.js 20 LTS is installed locally and matches the `user-management` runtime declared in `README.md`
-- [ ] [XS] Confirm `jest@^29.7.0` is resolvable in `user-management/node_modules` by running `npm ls jest` in `user-management/`
-- [ ] [XS] Verify write access to the `user-management/` directory and that `coverage/` is listed in `user-management/.gitignore`
+- [ ] [XS] Confirm Node.js 20 LTS is installed and `node --version` returns `v20.x` in `user-management/`
+- [ ] [XS] Confirm Jest 29.7.0 is resolvable by running `npx jest --version` in `user-management/`
+- [ ] [XS] Verify write access to `user-management/package.json` and the `user-management/coverage/` output directory
 
 ---
 
 ## Phase 1 — Preparation
 
-- [ ] [XS] Add `coverage/` to `.gitignore` in `user-management/.gitignore` to prevent generated coverage artefacts from being committed
-- [ ] [S] Capture a pre-change test baseline by running `npm test` in `user-management/` and recording pass/fail counts and any existing coverage output to `user-management/coverage-baseline.txt`
-- [ ] [XS] Confirm `collectCoverageFrom` in the `jest` block of `user-management/package.json` excludes test files via the existing `"!src/__tests__/**"` glob — no change needed if already correct
+- [ ] [XS] Create a feature branch `feat/jest-coverage-reporting` from `main` in the repository root
+- [ ] [S] Audit existing Jest coverage configuration in `user-management/package.json` under the `"jest"` key — document current `coverageDirectory`, `collectCoverageFrom`, and any missing `coverageReporters` or `coverageThresholds` fields
+- [ ] [XS] Run `npm test` in `user-management/` and capture the baseline coverage summary (lines, branches, functions, statements) for `src/**/*.js` excluding `src/__tests__/**` as the pre-change reference
 
 ---
 
 ## Phase 2 — Core Upgrade
 
-- [ ] [S] Add `@jest/coverage-provider` configuration and set `coverageProvider` to `"v8"` in the `jest` block of `user-management/package.json` to enable fast native V8 coverage collection
-- [ ] [S] Add `coverageReporters` array to the `jest` block in `user-management/package.json` specifying `["text", "lcov", "html"]` to produce terminal summary, `lcov.info` for CI ingestion, and browsable HTML report under `user-management/coverage/`
-- [ ] [XS] Add `coverageThresholds` block to the `jest` block in `user-management/package.json` setting `global` thresholds for `lines`, `functions`, `branches`, and `statements` at an initial value of `80` to enforce a coverage gate
-- [ ] [XS] Verify the `"test"` script in `user-management/package.json` remains `"jest --coverage"` and add a separate `"test:ci"` script as `"jest --coverage --ci --forceExit"` for non-interactive CI runs
+- [ ] [S] Add `coverageReporters` array (`["text", "lcov", "html", "json-summary"]`) to the `"jest"` config block in `user-management/package.json` so that `lcov.info`, `index.html`, and `coverage-summary.json` are all emitted under `user-management/coverage/`
+- [ ] [XS] Add `@jest/coverage-provider` option `"v8"` as `coverageProvider` in the `"jest"` config block in `user-management/package.json` to use the V8 native coverage engine available in Node.js 20
+- [ ] [XS] Add a `"test:coverage"` script entry in `user-management/package.json` set to `"jest --coverage --forceExit"` to provide an explicit coverage-only invocation distinct from the plain `"test"` script
+- [ ] [S] Add `coverageThresholds` block to the `"jest"` config in `user-management/package.json` with initial thresholds derived from the Phase 1 baseline (set `global` thresholds for `lines`, `branches`, `functions`, `statements` at the observed baseline percentage, rounded down to the nearest 5 to avoid immediate failures)
+- [ ] [XS] Add `user-management/coverage/` to `user-management/.gitignore` (create the file if absent) to prevent generated coverage artefacts from being committed
 
 ---
 
 ## Phase 3 — Testing & Validation
 
-- [ ] [S] Run `npm test` in `user-management/` and confirm all four test files (`health.test.js`, `loginUser.test.js`, `registerUser.test.js`, and any others under `src/__tests__/`) pass with coverage output printed to the terminal
-- [ ] [XS] Verify `user-management/coverage/lcov.info` is generated after the test run and is non-empty
-- [ ] [XS] Verify `user-management/coverage/index.html` is generated and opens correctly in a browser showing per-file line/branch/function metrics
-- [ ] [XS] Confirm coverage for `src/application/usecases/RecoverPassword.js` and `src/application/usecases/RegisterUser.js` is reported individually in the HTML output
-- [ ] [XS] Confirm the `coverageThresholds` gate triggers a non-zero exit code when thresholds are not met by temporarily lowering a threshold below the actual value, then restore the correct value
+- [ ] [S] Run `npm run test:coverage` in `user-management/` and verify all four report formats are written: `coverage/lcov.info`, `coverage/index.html`, `coverage/coverage-summary.json`, and console `text` table
+- [ ] [XS] Confirm coverage is collected from `src/application/usecases/RecoverPassword.js`, `src/application/usecases/RegisterUser.js`, `src/adapters/outbound/persistence/InMemoryUserRepository.js`, and `src/adapters/inbound/http/controllers/AuthController.js` by inspecting the `text` table output
+- [ ] [XS] Confirm `src/__tests__/` files are excluded from the coverage report by verifying no test files appear in the `coverage-summary.json` output
+- [ ] [XS] Intentionally lower one threshold value in `user-management/package.json` below the actual coverage to confirm Jest exits with a non-zero code, then restore the correct value
 
 ---
 
 ## Phase 4 — CI/CD & Infrastructure
 
-- [ ] [M] Update `.github/workflows/ci.yml` to add an `Upload coverage` step after the `npm test` step for the `user-management` job, using `actions/upload-artifact@v4` to archive `user-management/coverage/lcov.info` as artefact `user-management-coverage`
-- [ ] [S] Add an `npm run test:ci` invocation (using the new `test:ci` script) in `.github/workflows/ci.yml` for the `user-management` job in place of any bare `npm test` call, ensuring `--ci` flag prevents interactive prompts and `--forceExit` prevents Jest from hanging
+- [ ] [M] Update `.github/workflows/ci.yml` to add a coverage step in the `user-management` job: run `npm run test:coverage`, then upload `user-management/coverage/lcov.info` as a build artefact using `actions/upload-artifact@v4`
+- [ ] [XS] Add `coverage/` to the `user-management` service's `.dockerignore` (create if absent) so the `coverage/` directory is excluded from the Docker build context referenced in `README.md`
 
 ---
 
 ## Phase 5 — Documentation & Rollout
 
-- [ ] [XS] Update the `user-management` **Quick start** section in `README.md` to document that `npm test` produces a coverage report in `user-management/coverage/` and describe the three output formats (`text`, `lcov`, `html`)
-- [ ] [XS] Add a `## Coverage` section to `README.md` under the `user-management` service entry documenting the enforced 80% threshold and how to view the HTML report locally
+- [ ] [XS] Update the `user-management` **Quick start** section in `README.md` to document the `npm run test:coverage` script and note that HTML reports are written to `user-management/coverage/index.html`
+- [ ] [XS] Add a `## Coverage` section to `AGENTS.md` under the Jest + Supertest row describing the `coverageReporters`, `coverageProvider`, and threshold enforcement now in place in `user-management/package.json`
