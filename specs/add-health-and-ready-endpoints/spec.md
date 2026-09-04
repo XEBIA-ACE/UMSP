@@ -2,93 +2,74 @@
 
 ## Summary
 
-This spec covers the addition of liveness (`/health`) and readiness (`/ready`) probe endpoints to both the `user-management` (Node.js 20 / Express 4) and `payment-service` (Java 17 / Spring Boot 3.2) microservices. The `user-management` service already exposes `GET /api/health`; the `payment-service` already exposes `GET /api/health`. The expected outcome is that both services expose a consistent, unauthenticated `/api/health` (liveness) endpoint and a new `/api/ready` (readiness) endpoint, enabling orchestration platforms such as Kubernetes to perform reliable liveness and readiness probing against both services.
+This spec covers the addition of standardised liveness (`/health`) and readiness (`/ready`) HTTP probe endpoints to both the `user-management` service (Node.js 20 / Express 4) and the `payment-service` (Java 17 / Spring Boot 3.2). The `user-management` service already exposes `GET /api/health`; the `payment-service` already exposes `GET /api/health`. The expected outcome is that both services expose a consistent, unauthenticated `/api/health` (liveness) endpoint and a new `/api/ready` (readiness) endpoint, enabling orchestration platforms such as Kubernetes to distinguish between a process that is alive and one that is fully ready to serve traffic.
 
 ---
 
 ## Motivation
 
-- **Operational requirement:** Container orchestrators (e.g. Kubernetes) require distinct liveness and readiness probes. A single combined endpoint cannot express the difference between "the process is alive" and "the service is ready to accept traffic" (e.g. database connection established, downstream dependencies reachable).
-- **Current gap:** Both services expose only a liveness-style `GET /api/health` endpoint. Neither service exposes a dedicated `/api/ready` endpoint. Without a readiness probe, orchestrators cannot safely gate traffic during startup or graceful shutdown.
-- **Upgrade urgency:** Medium — no CVE or EOL driver; the gap creates operational risk during rolling deployments and restarts.
-- **Tech debt:** The existing `GET /api/health` endpoint in both services returns a static `"status": "ok"` payload with no dependency checks, making it unsuitable for use as a readiness signal.
+- **Operational requirement (medium urgency):** Both services are deployed in containerised environments (Docker / Kubernetes per `README.md` and `AGENTS.md`). Kubernetes requires separate liveness and readiness probes to correctly manage pod lifecycle. Without a `/ready` endpoint, the platform cannot distinguish a starting-up or degraded service from a healthy one, risking traffic being routed to unready pods.
+- **Consistency gap:** The `user-management` service and `payment-service` each have a `/api/health` liveness endpoint, but neither exposes a `/api/ready` readiness endpoint. The two existing `/api/health` implementations share the same response contract (`status`, `service`, `timestamp`) but are not formally specified, creating a risk of divergence.
+- **Tech debt:** The `payment-service` `SecurityConfig` explicitly permits `/api/health/**` but has no rule for a readiness path. Any new probe path must be added to the security allowlist to remain accessible without authentication.
 
 ---
 
 ## Current State
 
-### `user-management` (Node.js 20 · Express 4 · port 3000)
+### user-management (Node.js 20 / Express 4)
 
 | Element | Detail |
 |---|---|
-| Controller class | `HealthController` (`src/adapters/inbound/http/controllers/HealthController.js`) |
-| Route registration | `createHealthRouter()` (`src/adapters/inbound/http/routes/healthRoutes.js`) mounts `GET /` under the `/api/health` prefix |
-| Mounted path | `GET /api/health` |
-| Response shape | `{ status: "ok", service: "user-management", timestamp: "<ISO-8601>" }` |
+| Controller class | `HealthController` (`user-management/src/adapters/inbound/http/controllers/HealthController.js`) |
+| Method | `check(_req, res)` |
+| Route file | `healthRoutes.js` — mounts `GET /` on a sub-router, registered at `/api/health` |
+| Response shape | `{ status: "ok", service: "user-management", timestamp: <ISO-8601 string> }` |
 | HTTP status | `200 OK` |
-| Auth requirement | None (unauthenticated) |
-| Readiness endpoint | **Does not exist** |
-| Existing tests | `src/__tests__/health.test.js` — covers status 200, JSON content-type, ISO timestamp |
+| Auth | No authentication required (no middleware applied to health routes) |
+| Test file | `user-management/src/__tests__/health.test.js` — covers status, timestamp format, and Content-Type |
+| Missing | No `GET /api/ready` endpoint exists |
 
-### `payment-service` (Java 17 · Spring Boot 3.2 · port 8080)
+### payment-service (Java 17 / Spring Boot 3.2)
 
 | Element | Detail |
 |---|---|
-| Controller class | `HealthController` (`com.payments.adapters.inbound.rest.HealthController`) |
-| Request mapping | `@RequestMapping("/api/health")` with `@GetMapping` on `health()` method |
-| Response shape | `{ "status": "ok", "service": "payment-service", "timestamp": "<ISO-8601>" }` |
+| Controller class | `HealthController` (`payment-service/src/main/java/com/payments/adapters/inbound/rest/HealthController.java`) |
+| Mapping | `@RequestMapping("/api/health")`, `@GetMapping` on `health()` method |
+| Response shape | `Map<String, String>` with keys `status`, `service`, `timestamp` |
 | HTTP status | `200 OK` |
-| Auth requirement | None — `SecurityConfig` permits `/api/health/**` without authentication |
-| Security config | `com.payments.infrastructure.config.SecurityConfig` — `requestMatchers("/api/health/**").permitAll()` |
-| Readiness endpoint | **Does not exist** |
-| Existing tests | `HealthControllerTest` — `@SpringBootTest` with `TestSecurityConfig` overriding auth; covers status 200, `status: ok`, `service: payment-service`, non-empty timestamp |
+| Auth | `SecurityConfig` permits `/api/health/**` without authentication; all other requests require JWT or are denied |
+| Test file | `HealthControllerTest.java` — `@SpringBootTest` with `TestSecurityConfig` overriding auth; covers status, service name, timestamp presence |
+| Missing | No `GET /api/ready` endpoint exists; `SecurityConfig` has no rule for `/api/ready/**` |
 
 ---
 
 ## Proposed Changes
 
-### Overview
-
-Both services require a new `GET /api/ready` endpoint. The existing `GET /api/health` endpoint is retained unchanged as the liveness probe. The readiness probe must reflect whether the service is ready to serve traffic (dependency checks are in scope; specific dependencies are noted as TODO where not confirmed by context).
-
-### Component Table
+### user-management
 
 | Component | Before | After | Breaking? |
 |---|---|---|---|
-| `user-management` — `HealthController.js` | Exposes `check()` for liveness only | Adds `ready()` method for readiness check | N |
-| `user-management` — `healthRoutes.js` | Registers `GET /` (→ `/api/health`) | Also registers `GET /ready` (→ `/api/ready`) | N |
-| `user-management` — health test file | Tests `GET /api/health` only | Adds tests for `GET /api/ready` | N |
-| `payment-service` — `HealthController.java` | `@GetMapping` on `health()` at `/api/health` | Adds `@GetMapping("/ready")` method `ready()` at `/api/health/ready` | N |
-| `payment-service` — `SecurityConfig.java` | Permits `/api/health/**` | No change required — wildcard already covers `/api/health/ready` | N |
-| `payment-service` — `HealthControllerTest.java` | Tests `GET /api/health` only | Adds tests for `GET /api/health/ready` | N |
-| README.md endpoint tables | Lists `GET /api/health` for both services | Adds `GET /api/ready` (user-management) and `GET /api/health/ready` (payment-service) | N |
+| `HealthController.js` | Single `check()` method serving liveness only | Add `ready()` method returning readiness status | N |
+| `healthRoutes.js` | `GET /` → liveness | Add `GET /ready` → readiness | N |
+| Response contract (`/api/health`) | `{ status, service, timestamp }` | Unchanged | N |
+| Response contract (`/api/ready`) | Does not exist | `{ status: "ok" \| "unavailable", service, timestamp }` with `200` or `503` | N (new) |
+| Test file `health.test.js` | Covers `/api/health` only | Add test cases for `GET /api/ready` | N |
 
-### Endpoint Paths
+### payment-service
 
-| Service | Liveness (existing) | Readiness (new) |
-|---|---|---|
-| `user-management` | `GET /api/health` | `GET /api/ready` |
-| `payment-service` | `GET /api/health` | `GET /api/health/ready` |
+| Component | Before | After | Breaking? |
+|---|---|---|---|
+| `HealthController.java` | Single `health()` method at `GET /api/health` | Add `ready()` method at `GET /api/ready` | N |
+| `SecurityConfig.java` | Permits `/api/health/**`; no rule for `/api/ready/**` | Also permit `/api/ready/**` without authentication | N |
+| Response contract (`/api/health`) | `Map<String,String>` with `status`, `service`, `timestamp` | Unchanged | N |
+| Response contract (`/api/ready`) | Does not exist | `Map<String,String>` with `status`, `service`, `timestamp`; `200` or `503` | N (new) |
+| `HealthControllerTest.java` | Covers `GET /api/health` only | Add test cases for `GET /api/ready` | N |
 
-> **Note:** The `payment-service` readiness endpoint is placed at `/api/health/ready` because `HealthController` is already mapped to `/api/health` and the existing `SecurityConfig` wildcard `"/api/health/**"` covers it without modification. The `user-management` readiness endpoint is placed at `/api/ready` to match the flat routing convention already used in that service.
+### Shared contract (both services)
 
-### Response Shape — Readiness Endpoint
+The readiness endpoint must reflect whether the service's critical dependencies (e.g., database connectivity, required configuration) are available. When all dependencies are healthy the response status is `"ok"` and HTTP `200` is returned. When one or more dependencies are unavailable the response status is `"unavailable"` and HTTP `503 Service Unavailable` is returned.
 
-Both services shall return a JSON body on the readiness endpoint:
-
-- **When ready:** HTTP `200 OK` with `{ "status": "ready", "service": "<service-name>", "timestamp": "<ISO-8601>" }`
-- **When not ready:** HTTP `503 Service Unavailable` with `{ "status": "unavailable", "service": "<service-name>", "timestamp": "<ISO-8601>", "reason": "<human-readable description>" }`
-
-### Dependency Checks for Readiness
-
-The readiness probe should verify that the service can serve traffic. Specific checks:
-
-| Service | Dependency to check | Source confirmation |
-|---|---|---|
-| `user-management` | TODO — no database or external dependency confirmed in provided context for this service | TODO |
-| `payment-service` | TODO — `InMemoryPaymentRepository` is in use (no real DB); Stripe/PayPal gateway reachability check scope TBD | TODO |
-
-> If no dependency checks are implemented in the initial iteration, the readiness endpoint may return `200 ready` unconditionally, matching the liveness behaviour, and dependency checks can be added incrementally. This must be agreed with the owning team.
+> **Note:** The specific dependencies checked by `/api/ready` are TODO — see Open Questions.
 
 ---
 
@@ -96,43 +77,34 @@ The readiness probe should verify that the service can serve traffic. Specific c
 
 | Change | Impact | Migration Path |
 |---|---|---|
-| New `GET /api/ready` route in `user-management` | Additive — no existing callers affected | None required |
-| New `GET /api/health/ready` route in `payment-service` | Additive — no existing callers affected | None required |
-| `SecurityConfig` wildcard `/api/health/**` already covers `/api/health/ready` | No change to security rules needed | None required |
-| Readiness endpoint returns `503` when not ready | New behaviour — callers (orchestrators) must handle `503` | Kubernetes liveness/readiness probe configuration should use `failureThreshold` and `periodSeconds` appropriate for the service startup time |
-| `GET /api/health` liveness endpoint | Unchanged | None required |
+| New `GET /api/ready` endpoint (both services) | Additive — no existing callers affected | No migration required; callers opt in |
+| `SecurityConfig.java` updated to permit `/api/ready/**` | Existing security rules for `/api/payments/**` and the default `denyAll()` are unchanged | No migration required |
+| `/api/health` response shape unchanged | No impact on existing load-balancer or Kubernetes liveness probe configurations | No migration required |
+| HTTP `503` returned by `/api/ready` when unready | New behaviour on a new endpoint | Kubernetes readiness probe must be configured to treat `503` as "not ready" (standard behaviour) |
 
 ---
 
 ## Acceptance Criteria
 
-### `user-management` — Liveness (existing, must remain passing)
+1. **Given** the `user-management` service is running, **when** `GET /api/health` is called without an `Authorization` header, **then** the response is `200 OK` with `Content-Type: application/json` and a body containing `"status": "ok"`, `"service": "user-management"`, and a non-empty `timestamp` field that is a valid ISO-8601 string.
 
-1. Given the `user-management` service is running, when a client sends `GET /api/health` without an `Authorization` header, then the response status is `200 OK`, the `Content-Type` header matches `application/json`, and the body contains `{ "status": "ok", "service": "user-management" }` with a non-empty `timestamp` field that parses as a valid ISO-8601 date-time string.
+2. **Given** the `payment-service` is running, **when** `GET /api/health` is called without an `Authorization` header, **then** the response is `200 OK` with `Content-Type: application/json` and a body containing `"status": "ok"`, `"service": "payment-service"`, and a non-empty `timestamp` field.
 
-### `user-management` — Readiness (new)
+3. **Given** the `user-management` service is running and all required dependencies are available, **when** `GET /api/ready` is called without an `Authorization` header, **then** the response is `200 OK` with `Content-Type: application/json` and a body containing `"status": "ok"`, `"service": "user-management"`, and a non-empty `timestamp` field.
 
-2. Given the `user-management` service is running and all required dependencies are reachable, when a client sends `GET /api/ready` without an `Authorization` header, then the response status is `200 OK`, the `Content-Type` header matches `application/json`, and the body contains `{ "status": "ready", "service": "user-management" }` with a non-empty `timestamp` field that parses as a valid ISO-8601 date-time string.
+4. **Given** the `payment-service` is running and all required dependencies are available, **when** `GET /api/ready` is called without an `Authorization` header, **then** the response is `200 OK` with `Content-Type: application/json` and a body containing `"status": "ok"`, `"service": "payment-service"`, and a non-empty `timestamp` field.
 
-3. Given the `user-management` service is running but a required dependency is unavailable, when a client sends `GET /api/ready`, then the response status is `503 Service Unavailable` and the body contains `{ "status": "unavailable" }` with a non-empty `reason` field.
+5. **Given** the `user-management` service is running and a required dependency is unavailable, **when** `GET /api/ready` is called, **then** the response is `503 Service Unavailable` with `Content-Type: application/json` and a body containing `"status": "unavailable"`.
 
-4. Given the `user-management` service is running, when a client sends `GET /api/ready` without an `Authorization` header, then the request is not rejected with `401 Unauthorized` or `403 Forbidden` (the endpoint is publicly accessible).
+6. **Given** the `payment-service` is running and a required dependency is unavailable, **when** `GET /api/ready` is called, **then** the response is `503 Service Unavailable` with `Content-Type: application/json` and a body containing `"status": "unavailable"`.
 
-### `payment-service` — Liveness (existing, must remain passing)
+7. **Given** the `payment-service` `SecurityConfig` is active, **when** `GET /api/ready` is called without an `Authorization` header, **then** the response is not `401 Unauthorized` and not `403 Forbidden` (i.e., the endpoint is publicly accessible).
 
-5. Given the `payment-service` is running, when a client sends `GET /api/health` without a JWT bearer token, then the response status is `200 OK`, the `Content-Type` header matches `application/json`, and the body contains `{ "status": "ok", "service": "payment-service" }` with a non-empty `timestamp` field.
+8. **Given** the `payment-service` `SecurityConfig` is active, **when** any request is made to a path other than `/api/health/**`, `/api/ready/**`, or `/api/payments/**`, **then** the response is `403 Forbidden` (the existing `denyAll()` default is preserved).
 
-### `payment-service` — Readiness (new)
+9. **Given** the CI pipeline runs, **when** the `user-management` test suite executes (`npm test`), **then** all existing `health.test.js` tests pass and new tests covering `GET /api/ready` (status `200`, `"status": "ok"`, valid timestamp, correct `Content-Type`) also pass with no reduction in coverage for the health adapter.
 
-6. Given the `payment-service` is running and all required dependencies are reachable, when a client sends `GET /api/health/ready` without a JWT bearer token, then the response status is `200 OK`, the `Content-Type` header matches `application/json`, and the body contains `{ "status": "ready", "service": "payment-service" }` with a non-empty `timestamp` field that parses as a valid ISO-8601 date-time string.
-
-7. Given the `payment-service` is running but a required dependency is unavailable, when a client sends `GET /api/health/ready`, then the response status is `503 Service Unavailable` and the body contains `{ "status": "unavailable" }` with a non-empty `reason` field.
-
-8. Given the `payment-service` is running, when a client sends `GET /api/health/ready` without a JWT bearer token, then the request is not rejected with `401 Unauthorized` or `403 Forbidden` (the `SecurityConfig` permits `/api/health/**` without authentication, which covers this path).
-
-### CI
-
-9. Given the CI pipeline runs, when all unit and integration tests execute, then all existing tests for `HealthController` (both services) continue to pass and new tests for the `/ready` endpoint achieve at least the same coverage level as the existing health tests.
+10. **Given** the CI pipeline runs, **when** the `payment-service` test suite executes (`./mvnw test`), **then** all existing `HealthControllerTest` tests pass and new tests covering `GET /api/ready` (status `200`, `"status": "ok"`, timestamp present) also pass.
 
 ---
 
@@ -140,9 +112,9 @@ The readiness probe should verify that the service can serve traffic. Specific c
 
 | # | Question | Owner | Due Date |
 |---|---|---|---|
-| 1 | What specific dependency checks should the `user-management` readiness probe perform? (e.g. database ping, Redis connectivity) The provided context shows only an in-memory repository — is a real DB expected before this work lands? | TODO | TODO |
-| 2 | What specific dependency checks should the `payment-service` readiness probe perform? Should it verify Stripe/PayPal gateway reachability, or only internal state (e.g. application context started)? | TODO | TODO |
-| 3 | Should the readiness endpoint return `200` unconditionally in the initial iteration (matching liveness behaviour) with dependency checks added in a follow-up, or must dependency checks be included in this iteration? | TODO | TODO |
-| 4 | The `user-management` readiness path is proposed as `/api/ready` (flat) while `payment-service` uses `/api/health/ready` (nested). Should both services use the same path convention for consistency? | TODO | TODO |
-| 5 | Should the readiness response body include a structured `checks` array (one entry per dependency) or is a single `reason` string sufficient for the initial implementation? | TODO | TODO |
-| 6 | Are there any API gateway or load-balancer routing rules that need updating to pass through the new `/api/ready` and `/api/health/ready` paths? | TODO | TODO |
+| 1 | What specific dependencies should the `/api/ready` endpoint check for each service? (e.g., database reachability, Redis connectivity, external gateway availability) | TODO | TODO |
+| 2 | Should `/api/ready` perform active dependency probes on every call, or rely on a cached/background health state to avoid adding latency to the probe path? | TODO | TODO |
+| 3 | Should the readiness response body enumerate individual dependency statuses (e.g., `{ "db": "ok", "redis": "degraded" }`) or only a top-level `status` field? | TODO | TODO |
+| 4 | Is a `GET /api/ready` path sufficient, or is a separate startup probe endpoint also required for Kubernetes `startupProbe` configuration? | TODO | TODO |
+| 5 | Should the `user-management` service's `/api/ready` endpoint be protected by the same rate-limiting middleware (`rateLimiter.js`) applied to other routes, or exempted? | TODO | TODO |
+| 6 | Are there any SLA or response-time requirements for the probe endpoints (e.g., must respond within 200 ms) that should be enforced in CI? | TODO | TODO |
