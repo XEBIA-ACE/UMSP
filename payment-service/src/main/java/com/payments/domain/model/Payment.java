@@ -147,11 +147,11 @@ public class Payment {
     public LocalDateTime getUpdatedAt() { return updatedAt; }
 
     // -------------------------------------------------------------------------
-    // Builder factory
+    // Builder
     // -------------------------------------------------------------------------
 
     /**
-     * Returns a new {@link Builder} for constructing a {@link Payment} from scratch.
+     * Returns a new {@link Builder} for constructing a {@link Payment}.
      *
      * @return a fresh builder instance
      */
@@ -160,10 +160,10 @@ public class Payment {
     }
 
     /**
-     * Returns a {@link Builder} pre-populated with all fields of this payment,
-     * allowing selective overrides to produce a modified copy.
+     * Returns a {@link Builder} pre-populated with this instance's values,
+     * allowing a modified copy to be produced without altering the original.
      *
-     * @return a builder initialised with this payment's current state
+     * @return a builder seeded with this payment's field values
      */
     public Builder toBuilder() {
         return new Builder()
@@ -179,14 +179,55 @@ public class Payment {
                 .updatedAt(this.updatedAt);
     }
 
+    /**
+     * Fluent builder for {@link Payment}.
+     */
+    public static final class Builder {
+
+        private String id;
+        private String userId;
+        private BigDecimal amount;
+        private String currency;
+        private PaymentStatus status;
+        private PaymentMethod method;
+        private String gatewayTransactionId;
+        private String description;
+        private LocalDateTime createdAt;
+        private LocalDateTime updatedAt;
+
+        private Builder() {}
+
+        public Builder id(String id) { this.id = id; return this; }
+        public Builder userId(String userId) { this.userId = userId; return this; }
+        public Builder amount(BigDecimal amount) { this.amount = amount; return this; }
+        public Builder currency(String currency) { this.currency = currency; return this; }
+        public Builder status(PaymentStatus status) { this.status = status; return this; }
+        public Builder method(PaymentMethod method) { this.method = method; return this; }
+        public Builder gatewayTransactionId(String gatewayTransactionId) { this.gatewayTransactionId = gatewayTransactionId; return this; }
+        public Builder description(String description) { this.description = description; return this; }
+        public Builder createdAt(LocalDateTime createdAt) { this.createdAt = createdAt; return this; }
+        public Builder updatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; return this; }
+
+        /**
+         * Constructs the {@link Payment} from the current builder state.
+         *
+         * @return a new {@link Payment} instance
+         */
+        public Payment build() {
+            return new Payment(id, userId, amount, currency, status, method,
+                    gatewayTransactionId, description, createdAt, updatedAt);
+        }
+    }
+
     // -------------------------------------------------------------------------
-    // equals / hashCode / toString
+    // Object overrides
     // -------------------------------------------------------------------------
 
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof Payment payment)) return false;
+        if (o == null || getClass() != o.getClass()) return false;
+        Payment payment = (Payment) o;
         return Objects.equals(id, payment.id);
     }
 
@@ -209,71 +250,5 @@ public class Payment {
                 ", createdAt=" + createdAt +
                 ", updatedAt=" + updatedAt +
                 '}';
-    }
-
-    // -------------------------------------------------------------------------
-    // Inner Builder
-    // -------------------------------------------------------------------------
-
-    /**
-     * Fluent builder for {@link Payment}.
-     */
-    public static final class Builder {
-
-        private String id;
-        private String userId;
-        private BigDecimal amount;
-        private String currency;
-        private PaymentStatus status;
-        private PaymentMethod method;
-        private String gatewayTransactionId;
-        private String description;
-        private LocalDateTime createdAt;
-        private LocalDateTime updatedAt;
-
-        private Builder() {}
-
-        /** @param id unique payment identifier; @return this builder */
-        public Builder id(String id) { this.id = id; return this; }
-
-        /** @param userId owning user identifier; @return this builder */
-        public Builder userId(String userId) { this.userId = userId; return this; }
-
-        /** @param amount monetary amount; @return this builder */
-        public Builder amount(BigDecimal amount) { this.amount = amount; return this; }
-
-        /** @param currency ISO 4217 currency code; @return this builder */
-        public Builder currency(String currency) { this.currency = currency; return this; }
-
-        /** @param status current payment status; @return this builder */
-        public Builder status(PaymentStatus status) { this.status = status; return this; }
-
-        /** @param method payment gateway method; @return this builder */
-        public Builder method(PaymentMethod method) { this.method = method; return this; }
-
-        /** @param gatewayTransactionId gateway-assigned transaction id; @return this builder */
-        public Builder gatewayTransactionId(String gatewayTransactionId) {
-            this.gatewayTransactionId = gatewayTransactionId;
-            return this;
-        }
-
-        /** @param description human-readable description; @return this builder */
-        public Builder description(String description) { this.description = description; return this; }
-
-        /** @param createdAt creation timestamp; @return this builder */
-        public Builder createdAt(LocalDateTime createdAt) { this.createdAt = createdAt; return this; }
-
-        /** @param updatedAt last-updated timestamp; @return this builder */
-        public Builder updatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; return this; }
-
-        /**
-         * Constructs the {@link Payment} from the current builder state.
-         *
-         * @return a new {@link Payment} instance
-         */
-        public Payment build() {
-            return new Payment(id, userId, amount, currency, status, method,
-                    gatewayTransactionId, description, createdAt, updatedAt);
-        }
     }
 }
