@@ -6,49 +6,45 @@
 **Purpose:** Add `pytest-cov` to the `user-management` Node.js service's test toolchain to enable structured test coverage reporting.
 **High-level goal:** Instrument the existing Jest-based test suite in `user-management` with coverage reporting tooling, ensuring coverage results are generated consistently on every test run and visible in CI.
 
-> **Note:** The source code shows a Node.js/Jest project (`user-management`) and a Java/JUnit5 project (`payment-service`). `pytest-cov` is a Python tool. The task as stated cannot be applied literally to either service. This constitution governs the closest valid interpretation: **adding or formalising coverage reporting for the `user-management` service using its native toolchain (Jest `--coverage` / `jest-cov` equivalent)**. If a Python service exists elsewhere in the monorepo, that scope is a TODO.
+> **Note:** The source code is a Node.js / Jest project. `pytest-cov` is a Python tool. The task as stated targets a Python context, but no Python service exists in this codebase. This constitution governs the intent — adding a coverage reporting plugin to the test runner — applied to the actual stack (Jest + `--coverage`). **TODO: Confirm with project owner whether a Python service is in scope or whether this task targets Jest coverage configuration.**
 
 ---
 
 ## Guiding Principles
 
-1. **Prefer native Jest coverage over introducing foreign tooling** because the `user-management` service is Node.js 20/Jest 29 — adding a Python tool (`pytest-cov`) would introduce an unrelated runtime dependency with no benefit.
-2. **Prefer extending the existing `jest --coverage` configuration over adding new test runners** because `package.json` already declares `"test": "jest --coverage"` and a `coverageDirectory`/`collectCoverageFrom` config — the infrastructure is already partially in place.
-3. **Prefer explicit `collectCoverageFrom` globs over implicit collection** because implicit collection risks missing new source files or including test files, producing misleading metrics.
-4. **Prefer CI-enforced coverage thresholds over advisory-only reporting** because coverage gates without enforcement degrade silently over time.
-5. **Prefer a single authoritative coverage report format (lcov + text-summary)** over multiple redundant formats to keep CI output readable and tooling integrations simple.
+1. **Prefer extending the existing Jest `--coverage` flag over introducing a new test runner** because `package.json` already declares `"test": "jest --coverage"` and adding a second coverage tool would create conflicting reports.
+2. **Prefer configuration-as-code over ad-hoc CLI flags** because `collectCoverageFrom` and `coverageDirectory` are already declared in `package.json`'s `jest` block — all coverage settings must live there, not in scattered scripts.
+3. **Prefer coverage enforcement at CI gate over developer-local enforcement** because the upgrade urgency is medium and blocking local development workflows is disproportionate to the risk.
+4. **Prefer additive changes over rewrites** because the existing test suite (health, loginUser, registerUser) is already passing; coverage tooling must not alter test behaviour or test output format.
 
 ---
 
 ## Constraints
 
-- **Timeline/effort:** Upgrade option is "moderate" with no explicit person-days figure. Treat as a small, bounded task — **TODO: confirm effort ceiling with project lead.**
-- **Runtime mandate:** Node.js 20 LTS (`user-management`); Java 17/21 (`payment-service`). No Python runtime may be introduced unless a Python service is confirmed to exist — **TODO: confirm whether a Python service is in scope.**
-- **Scope freeze:** Changes are limited to `user-management/` test configuration and CI pipeline. No production source changes are permitted.
-- **No new test framework:** Jest 29 remains the sole test runner for `user-management`. No migration to Vitest, Mocha, or any other runner is in scope.
-- **Budget:** No additional paid tooling or SaaS coverage services are in scope unless explicitly approved — **TODO: confirm if Codecov/Coveralls integration is desired.**
+- **Effort ceiling:** Moderate option — changes must be completable in a small number of person-days (exact figure not provided; **TODO: confirm person-days from project manager**).
+- **Runtime mandate:** Node.js 20 LTS (per `README.md` and `AGENTS.md`); no runtime version changes permitted.
+- **Scope freeze:** Only the `user-management` service is in scope. The `payment-service` (Java 17 / Spring Boot) uses JUnit 5 + JaCoCo conventions and is **out of scope**.
+- **No new test framework:** Jest 29 is the mandated test runner; switching to a different runner is not permitted.
+- **No production dependency changes:** Coverage tooling must be added to `devDependencies` only.
 
 ---
 
 ## Quality Standards
 
-| Standard | Measurable Bar |
-|---|---|
-| Coverage floor — statements | ≥ 80% statement coverage on `src/**/*.js` (excluding `src/__tests__/**`) |
-| Coverage floor — branches | ≥ 75% branch coverage |
-| CI gate | `npm test` must exit 0; a non-zero exit from a coverage threshold failure blocks merge |
-| Report artifacts | `coverage/lcov.info` and `coverage/coverage-summary.json` must be produced on every CI run |
-| PR review | Coverage diff must be reviewed; PRs that drop coverage below threshold are blocked |
-| Documentation | `README.md` must include a "Test Coverage" section describing how to run and interpret reports |
+- **Coverage floor:** Line coverage must reach ≥ 80% across `src/**/*.js` (excluding `src/__tests__/**`) before the task is considered complete.
+- **Coverage report formats:** At minimum, `text` (console summary) and `lcov` (for CI upload) reporters must be configured.
+- **CI gate:** The `npm test` command must exit non-zero if coverage thresholds are not met; this must be verified in the GitHub Actions workflow (`ci.yml`).
+- **No test regressions:** All pre-existing tests must continue to pass after configuration changes; a red test suite blocks merge.
+- **Documentation:** `README.md` `npm test` description must reflect the coverage threshold and report output location (`coverage/`).
+- **Code review:** All changes to `package.json` and CI configuration require at least one peer review approval before merge.
 
 ---
 
 ## Decision Log
 
 | ID | Decision | Rationale | Status |
-|---|---|---|---|
-| ADR-001 | Use Jest's built-in `--coverage` (via V8/Istanbul) rather than `pytest-cov` | Project runtime is Node.js 20; `pytest-cov` is Python-only and inapplicable | Accepted |
-| ADR-002 | Retain `jest --coverage` in the `"test"` npm script | Already present in `package.json`; no migration cost | Accepted |
-| ADR-003 | Enforce coverage thresholds via Jest `coverageThreshold` config | Prevents silent regression; native to Jest 29 with zero extra dependencies | Accepted |
-| ADR-004 | Scope limited to `user-management/`; `payment-service` uses JaCoCo (Maven) | Each service uses its own ecosystem tooling; cross-service changes are out of scope | Accepted |
-| ADR-005 | Python service scope | No Python service identified in source analysis; `pytest-cov` applicability is **TODO** pending confirmation | Proposed |
+|----|----------|-----------|--------|
+| ADR-001 | Use Jest's built-in `--coverage` (via `jest-circus` + V8/Istanbul) rather than adding `pytest-cov` | No Python runtime exists in this repository; Jest already ships coverage support; adding `pytest-cov` would require a Python toolchain with no benefit | Accepted |
+| ADR-002 | Coverage thresholds declared in `package.json` `jest.coverageThreshold` block | Keeps all test configuration co-located; consistent with existing `collectCoverageFrom` and `coverageDirectory` settings already present | Accepted |
+| ADR-003 | `lcov` + `text` reporters selected as minimum set | `lcov` enables CI coverage upload (e.g. Codecov/Coveralls); `text` provides immediate console feedback | Accepted |
+| ADR-004 | Python service scope — **TODO** | No Python service identified in codebase; task may be misrouted or a Python service may be planned but not yet present | Proposed |
