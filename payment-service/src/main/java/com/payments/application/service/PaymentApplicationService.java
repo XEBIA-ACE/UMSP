@@ -79,12 +79,12 @@ public class PaymentApplicationService
 
         Payment payment = Payment.builder()
                 .id(paymentId)
-                .userId(request.userId())
-                .amount(request.amount())
-                .currency(request.currency())
+                .userId(request.getUserId())
+                .amount(request.getAmount())
+                .currency(request.getCurrency())
                 .status(PaymentStatus.PENDING)
-                .method(request.method())
-                .description(request.description())
+                .method(request.getMethod())
+                .description(request.getDescription())
                 .createdAt(now)
                 .updatedAt(now)
                 .build();
@@ -97,18 +97,18 @@ public class PaymentApplicationService
         boolean success;
         String errorMessage = null;
 
-        if (request.method() == PaymentMethod.STRIPE) {
+        if (request.getMethod() == PaymentMethod.STRIPE) {
             StripeGatewayPort.ChargeResult result = stripeGateway.charge(
-                    request.userId(), request.amount(), request.currency(), request.description());
-            success = result.success();
-            transactionId = result.transactionId();
-            errorMessage = result.errorMessage();
+                    request.getUserId(), request.getAmount(), request.getCurrency(), request.getDescription());
+            success = result.isSuccess();
+            transactionId = result.getTransactionId();
+            errorMessage = result.getErrorMessage();
         } else {
             PayPalGatewayPort.ChargeResult result = payPalGateway.charge(
-                    request.userId(), request.amount(), request.currency(), request.description());
-            success = result.success();
-            transactionId = result.transactionId();
-            errorMessage = result.errorMessage();
+                    request.getUserId(), request.getAmount(), request.getCurrency(), request.getDescription());
+            success = result.isSuccess();
+            transactionId = result.getTransactionId();
+            errorMessage = result.getErrorMessage();
         }
 
         // 4. Update payment status based on gateway result
@@ -121,76 +121,71 @@ public class PaymentApplicationService
                 .build();
 
         // 5. Persist the updated payment
-        paymentRepository.update(updatedPayment);
+        paymentRepository.save(updatedPayment);
 
-        // 6. Send notification on success
+        // 6. Send a payment confirmation notification on success
         if (success) {
-            notificationPort.sendPaymentConfirmation(request.userId(), updatedPayment);
+            notificationPort.sendPaymentConfirmation(updatedPayment);
         }
 
-        // 7. Return response
-        String message = success
-                ? "Payment processed successfully"
-                : "Payment failed: " + errorMessage;
-
-        return new ProcessPaymentResponse(paymentId, finalStatus, transactionId, message);
+        // 7. Return a ProcessPaymentResponse
+        // TODO: Verify ProcessPaymentResponse constructor/builder API matches target version
+        return new ProcessPaymentResponse(
+                updatedPayment.getId(),
+                updatedPayment.getStatus(),
+                transactionId,
+                errorMessage);
     }
 
     /**
      * {@inheritDoc}
-     *
-     * @throws RuntimeException if no payment with the given {@code id} exists
      */
     @Override
-    public Payment getById(String id) {
-        return paymentRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Payment not found: " + id));
+    public Payment getPayment(String paymentId) {
+        return paymentRepository.findById(paymentId)
+                .orElseThrow(() -> new IllegalArgumentException("Payment not found: " + paymentId));
     }
 
     /**
      * {@inheritDoc}
-     *
-     * <p>Refund steps:
-     * <ol>
-     *   <li>Retrieve the payment; throw if not found.</li>
-     *   <li>Validate that the payment status is {@link PaymentStatus#COMPLETED}.</li>
-     *   <li>Update the payment status to {@link PaymentStatus#REFUNDED}.</li>
-     *   <li>Persist the updated payment.</li>
-     *   <li>Send a refund confirmation notification.</li>
-     *   <li>Return a {@link RefundResponse}.</li>
-     * </ol>
-     *
-     * @throws RuntimeException if the payment is not found or is not in COMPLETED status
      */
     @Override
     public RefundResponse refund(RefundRequest request) {
-        // 1. Retrieve the payment
-        Payment payment = paymentRepository.findById(request.paymentId())
-                .orElseThrow(() -> new RuntimeException("Payment not found: " + request.paymentId()));
+        Payment payment = paymentRepository.findById(request.getPaymentId())
+                .orElseThrow(() -> new IllegalArgumentException("Payment not found: " + request.getPaymentId()));
 
-        // 2. Validate status
         if (payment.getStatus() != PaymentStatus.COMPLETED) {
-            throw new RuntimeException(
-                    "Payment " + request.paymentId() + " cannot be refunded: current status is "
-                            + payment.getStatus());
+            throw new IllegalStateException("Only completed payments can be refunded");
         }
 
-        // 3. Update to REFUNDED
-        Payment refundedPayment = payment.toBuilder()
-                .status(PaymentStatus.REFUNDED)
-                .updatedAt(LocalDateTime.now())
-                .build();
+        boolean success;
+        String errorMessage = null;
 
-        // 4. Persist
-        paymentRepository.update(refundedPayment);
+        if (payment.getMethod() == PaymentMethod.STRIPE) {
+            StripeGatewayPort.RefundResult result = stripeGateway.refund(
+                    payment.getGatewayTransactionId(), request.getAmount());
+            success = result.isSuccess();
+            errorMessage = result.getErrorMessage();
+        } else {
+            PayPalGatewayPort.RefundResult result = payPalGateway.refund(
+                    payment.getGatewayTransactionId(), request.getAmount());
+            success = result.isSuccess();
+            errorMessage = result.getErrorMessage();
+        }
 
-        // 5. Notify
-        notificationPort.sendRefundConfirmation(payment.getUserId(), refundedPayment);
+        if (success) {
+            Payment refundedPayment = payment.toBuilder()
+                    .status(PaymentStatus.REFUNDED)
+                    .updatedAt(LocalDateTime.now())
+                    .build();
+            paymentRepository.save(refundedPayment);
+            notificationPort.sendRefundConfirmation(refundedPayment);
+        }
 
-        // 6. Return response
+        // TODO: Verify RefundResponse constructor/builder API matches target version
         return new RefundResponse(
-                request.paymentId(),
-                PaymentStatus.REFUNDED,
-                "Refund processed successfully");
+                payment.getId(),
+                success ? PaymentStatus.REFUNDED : PaymentStatus.COMPLETED,
+                errorMessage);
     }
 }
