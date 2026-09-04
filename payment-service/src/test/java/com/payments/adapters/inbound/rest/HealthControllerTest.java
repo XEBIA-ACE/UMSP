@@ -2,15 +2,11 @@ package com.payments.adapters.inbound.rest;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import com.payments.infrastructure.PaymentServiceApplication;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -19,37 +15,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Integration tests for {@link HealthController}.
  *
- * <p>The Spring Boot application context is started on a random port. Security is
- * overridden via a {@link TestConfiguration} that permits all requests so that the
- * health endpoint can be reached without a JWT token.
+ * <p>The Spring Boot application context is started on a random port. The health
+ * endpoint is public in the production security configuration, so no token is needed.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = PaymentServiceApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
 class HealthControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
-
-    // -------------------------------------------------------------------------
-    // Test-only security configuration – permits all requests
-    // -------------------------------------------------------------------------
-
-    /**
-     * Overrides the production {@link SecurityFilterChain} for tests so that all
-     * requests are permitted without authentication.
-     */
-    @TestConfiguration
-    static class TestSecurityConfig {
-
-        @Bean
-        @Primary
-        SecurityFilterChain testSecurityFilterChain(HttpSecurity http) throws Exception {
-            http
-                .csrf(csrf -> csrf.disable())
-                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
-            return http.build();
-        }
-    }
 
     // -------------------------------------------------------------------------
     // Tests

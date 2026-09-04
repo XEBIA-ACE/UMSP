@@ -13,16 +13,12 @@ import com.payments.domain.ports.inbound.ProcessPaymentUseCase;
 import com.payments.domain.ports.inbound.RefundPaymentUseCase;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import com.payments.infrastructure.PaymentServiceApplication;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
-import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
@@ -30,6 +26,7 @@ import java.time.LocalDateTime;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -38,10 +35,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Integration tests for {@link PaymentController}.
  *
  * <p>The Spring Boot application context is started on a random port. The three
- * use-case ports are replaced with Mockito mocks via {@link MockBean}. Security is
- * overridden to permit all requests so that tests focus on controller behaviour.
+ * use-case ports are replaced with Mockito mocks via {@link MockBean}. Requests carry a
+ * mock JWT (via {@code jwt()}) so that they pass the OAuth2 resource-server security.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(classes = PaymentServiceApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureMockMvc
 class PaymentControllerTest {
 
@@ -59,27 +56,6 @@ class PaymentControllerTest {
 
     @MockBean
     private RefundPaymentUseCase refundPaymentUseCase;
-
-    // -------------------------------------------------------------------------
-    // Test-only security configuration – permits all requests
-    // -------------------------------------------------------------------------
-
-    /**
-     * Overrides the production {@link SecurityFilterChain} for tests so that all
-     * requests are permitted without authentication.
-     */
-    @TestConfiguration
-    static class TestSecurityConfig {
-
-        @Bean
-        @Primary
-        SecurityFilterChain testSecurityFilterChain(HttpSecurity http) throws Exception {
-            http
-                .csrf(csrf -> csrf.disable())
-                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
-            return http.build();
-        }
-    }
 
     // -------------------------------------------------------------------------
     // Tests
@@ -111,6 +87,7 @@ class PaymentControllerTest {
                 .thenReturn(response);
 
         mockMvc.perform(post("/api/payments")
+                        .with(jwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isCreated())
@@ -130,6 +107,7 @@ class PaymentControllerTest {
                 .thenThrow(new RuntimeException("Payment not found: unknown-id"));
 
         mockMvc.perform(get("/api/payments/unknown-id")
+                        .with(jwt())
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isNotFound());
     }
@@ -157,6 +135,7 @@ class PaymentControllerTest {
         when(getPaymentUseCase.getById("pay-xyz")).thenReturn(payment);
 
         mockMvc.perform(get("/api/payments/pay-xyz")
+                        .with(jwt())
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("pay-xyz"))
@@ -177,6 +156,7 @@ class PaymentControllerTest {
         when(refundPaymentUseCase.refund(any(RefundRequest.class))).thenReturn(refundResponse);
 
         mockMvc.perform(post("/api/payments/pay-xyz/refund")
+                        .with(jwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(refundRequest)))
                 .andExpect(status().isOk())
