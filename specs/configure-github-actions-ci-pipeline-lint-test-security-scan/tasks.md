@@ -1,64 +1,77 @@
-# TASKS: Configure GitHub Actions CI Pipeline (Lint, Test, Security Scan)
-
-> **Scope:** Set up a GitHub Actions CI pipeline covering lint, test, and security scan stages.
-> **Upgrade Option:** Moderate
-> **Note:** Language, runtime, and build tool are unspecified in the tech analysis. Tasks below are written to the extent determinable; the implementing agent must substitute concrete tool names, file paths, and version pins once the repository is inspected.
-
----
+# Tasks: Configure GitHub Actions CI Pipeline (lint, test, security scan)
 
 ## Prerequisites
 
-- [ ] [XS] Confirm repository visibility (public/private) and verify GitHub Actions is enabled under **Settings → Actions → General** in the target repository
-- [ ] [XS] Identify the primary language, runtime version, and build tool by inspecting the repository root (e.g., `package.json`, `pom.xml`, `requirements.txt`, `go.mod`, `Gemfile`) and record findings before any pipeline work begins
-- [ ] [XS] Confirm that a `GITHUB_TOKEN` with sufficient permissions (read for checkout, write for PR status checks) is available as a default Actions secret — no manual secret creation required unless third-party scanners are used
-- [ ] [XS] Identify any existing CI configuration files (e.g., `.travis.yml`, `Jenkinsfile`, `circle.yml`) in the repository root that may conflict with the new workflow and flag them for deprecation
+- [ ] [XS] Confirm GitHub Actions is enabled for the repository and the `.github/workflows/` directory exists at the monorepo root
+- [ ] [XS] Verify Node.js 20 LTS and Java 21 runner images are available in the GitHub Actions runner environment (ubuntu-latest)
+- [ ] [XS] Confirm repository secrets `STRIPE_API_KEY`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, and `JWT_SECRET` are registered in GitHub repository Settings → Secrets and variables → Actions (required for integration test steps)
+- [ ] [XS] Confirm `package-lock.json` is committed in `user-management/` so `npm ci` is reproducible in CI
+- [ ] [XS] Confirm Maven Wrapper (`mvnw` / `.mvn/`) is committed in `payment-service/` so `./mvnw` is executable without a pre-installed Maven binary
 
 ---
 
 ## Phase 1 — Preparation
 
-- [ ] [XS] Create a long-lived feature branch `ci/github-actions-pipeline` from the default branch to contain all pipeline configuration changes
-- [ ] [S] Audit existing test scripts and lint commands in the project's build manifest (e.g., `scripts` block in `package.json`, `Makefile` targets, `tox.ini`) and document the exact commands the pipeline will invoke in a scratch note or PR description
-- [ ] [XS] Create the directory `.github/workflows/` at the repository root if it does not already exist
-- [ ] [XS] Identify the appropriate GitHub-hosted runner OS (e.g., `ubuntu-latest`) and confirm it supports the detected runtime version before writing any workflow YAML
+- [ ] [XS] Create feature branch `ci/github-actions-pipeline` from `main` in the monorepo root
+- [ ] [S] Capture local test baseline for `user-management` by running `npm ci && npm test -- --coverage` in `user-management/` and recording pass/fail counts and coverage percentages from `coverage/` output
+- [ ] [S] Capture local test baseline for `payment-service` by running `./mvnw test` in `payment-service/` and recording Surefire pass/fail counts from `target/surefire-reports/`
+- [ ] [XS] Add `.env.example` values as non-secret CI environment variable defaults in `.github/workflows/ci.yml` (e.g. `NODE_ENV=test`, `JWT_EXPIRES_IN=7d`, `NOTIFICATION_EMAIL_ENABLED=false`, `PAYPAL_MODE=sandbox`) so tests run without real credentials
 
 ---
 
 ## Phase 2 — Core Upgrade
 
-- [ ] [M] Create `.github/workflows/ci.yml` with a top-level workflow definition: set `name: CI`, define `on` triggers for `push` (all branches) and `pull_request` (targeting the default branch), and declare a `permissions` block scoped to `contents: read`
-- [ ] [M] Add a `lint` job to `.github/workflows/ci.yml`: configure the correct runner, add a checkout step using `actions/checkout@v4`, set up the runtime using the appropriate setup action (e.g., `actions/setup-node`, `actions/setup-python`, `actions/setup-java`) with an explicit version pin derived from the repository's runtime, and invoke the project's lint command identified in Phase 1
-- [ ] [M] Add a `test` job to `.github/workflows/ci.yml`: reuse the same runner and setup steps as the `lint` job (or extract them into a reusable composite action if duplication is significant), invoke the project's test command, and configure the job to upload test result artifacts using `actions/upload-artifact@v4` if the test framework produces a report file
-- [ ] [M] Add a `security-scan` job to `.github/workflows/ci.yml`: integrate a dependency vulnerability scanner appropriate to the detected language (e.g., `actions/dependency-review-action@v4` for pull requests, or `github/codeql-action` for SAST) with default configuration and `continue-on-error: false` to enforce the gate
-- [ ] [S] Configure job dependencies in `.github/workflows/ci.yml` using `needs:` so that `test` runs after `lint` passes and `security-scan` runs in parallel with `test`, minimising total pipeline duration
-- [ ] [XS] Add a `.github/workflows/ci.yml` `concurrency` block scoped to `${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress: true` to prevent redundant runs on rapid pushes
+- [ ] [M] Create `.github/workflows/ci.yml` with a `lint-and-test-node` job that:
+  - triggers on `push` and `pull_request` to `main`
+  - uses `actions/checkout@v4`
+  - sets up Node.js 20 with `actions/setup-node@v4` and `cache: 'npm'` pointing to `user-management/package-lock.json`
+  - runs `npm ci` in `user-management/`
+  - runs ESLint via `npx eslint .` using `user-management/.eslintrc.js`
+  - runs `npm test -- --coverage` in `user-management/` and uploads `user-management/coverage/` as an artifact
+
+- [ ] [M] Add a `test-java` job to `.github/workflows/ci.yml` that:
+  - uses `actions/setup-java@v4` with `distribution: temurin` and `java-version: 21`
+  - caches the Maven local repository (`~/.m2`) keyed on `payment-service/pom.xml`
+  - runs `./mvnw --batch-mode test` in `payment-service/`
+  - uploads `payment-service/target/surefire-reports/` as an artifact
+  - sets required environment variables: `OAUTH2_ISSUER_URI`, `STRIPE_API_KEY`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` from repository secrets
+
+- [ ] [S] Create `.github/workflows/security-scan.yml` with a `dependency-audit-node` job that:
+  - triggers on `push` to `main` and on a weekly schedule (`cron: '0 3 * * 1'`)
+  - runs `npm audit --audit-level=high` in `user-management/`
+  - fails the job if high or critical vulnerabilities are found
+
+- [ ] [S] Add a `dependency-audit-java` job to `.github/workflows/security-scan.yml` that:
+  - uses `actions/setup-java@v4` with `distribution: temurin` and `java-version: 21`
+  - runs `./mvnw --batch-mode dependency:check -DfailBuildOnCVSS=7` (OWASP Dependency-Check plugin) in `payment-service/`
+  - uploads the generated `target/dependency-check-report.html` as an artifact
+
+- [ ] [S] Add a `codeql-analysis` job to `.github/workflows/security-scan.yml` using `github/codeql-action/init@v3` and `github/codeql-action/analyze@v3` targeting both `javascript` (for `user-management/`) and `java` (for `payment-service/`) language matrices
 
 ---
 
 ## Phase 3 — Testing & Validation
 
-- [ ] [S] Trigger the workflow manually via `workflow_dispatch` (add the trigger to `.github/workflows/ci.yml`) on the feature branch and verify all three jobs (`lint`, `test`, `security-scan`) complete with green status in the **Actions** tab
-- [ ] [XS] Introduce a deliberate lint error in a throwaway branch, open a draft PR, and confirm the `lint` job fails and blocks merge — then revert
-- [ ] [XS] Confirm test results artifact is accessible in the **Actions** run summary if a report file was configured in Phase 2
-- [ ] [XS] Verify the `security-scan` job produces a populated results summary in the **Security** tab (or Actions log) and that a known-vulnerable dependency (if any) surfaces correctly
+- [ ] [S] Trigger the `ci.yml` workflow on the feature branch via a draft pull request and confirm the `lint-and-test-node` job passes with the same test counts captured in Phase 1 baseline
+- [ ] [S] Confirm the `test-java` job passes and Surefire reports for `HealthControllerTest`, `PaymentControllerTest`, and `PaymentApplicationServiceTest` all show green in the uploaded artifact
+- [ ] [XS] Confirm ESLint step exits 0 against `user-management/.eslintrc.js` with no blocking errors
+- [ ] [XS] Confirm `npm audit` step in `security-scan.yml` completes without failing on the current `user-management/package.json` dependency set
+- [ ] [XS] Confirm OWASP Dependency-Check step completes and the HTML report artifact is accessible in the Actions run summary
 
 ---
 
 ## Phase 4 — CI/CD & Infrastructure
 
-- [ ] [S] Enable **branch protection** on the default branch under **Settings → Branches**: require status checks `lint`, `test`, and `security-scan` to pass before merging, and enable "Require branches to be up to date before merging"
-- [ ] [XS] Set the workflow-level `permissions` in `.github/workflows/ci.yml` to the minimum required (e.g., `contents: read`, `security-events: write` only if CodeQL is used) to satisfy least-privilege requirements
-- [ ] [XS] Deprecate or remove any legacy CI configuration files identified in Phase 1 (e.g., `.travis.yml`) in a follow-up commit on the same branch to avoid conflicting status checks
+- [ ] [XS] Add `paths` filters to the `lint-and-test-node` job trigger in `.github/workflows/ci.yml` so it only runs when files under `user-management/**` change, avoiding unnecessary runs on Java-only commits
+- [ ] [XS] Add `paths` filters to the `test-java` job trigger in `.github/workflows/ci.yml` so it only runs when files under `payment-service/**` change
+- [ ] [XS] Set `JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8` as a job-level environment variable in the `test-java` job in `.github/workflows/ci.yml` to prevent encoding issues in Surefire output on ubuntu-latest runners
+- [ ] [XS] Add branch protection rule configuration note to `.github/workflows/ci.yml` (as a comment block) documenting that `lint-and-test-node` and `test-java` should be set as required status checks on `main` in repository Settings → Branches
 
 ---
 
 ## Phase 5 — Documentation & Rollout
 
-- [ ] [S] Add a `## CI Pipeline` section to `CONTRIBUTING.md` (or create the file if absent) documenting: how to run lint and tests locally, what each CI job checks, and how to interpret security scan results
-- [ ] [XS] Add a GitHub Actions status badge for the `ci.yml` workflow to `README.md` using the standard badge URL pattern `https://github.com/<owner>/<repo>/actions/workflows/ci.yml/badge.svg`
-- [ ] [XS] Update `CHANGELOG.md` (or create it) with an entry recording the addition of the GitHub Actions CI pipeline, the three enforced gates, and the date of rollout
-- [ ] [XS] Notify the team (via PR description or team channel) that branch protection is now active on the default branch and that all future PRs must pass `lint`, `test`, and `security-scan` before merge
-
----
-
-> **Agent note:** Tasks in Phase 2 marked `[M]` assume a single-language, single-module repository. If the repository is a monorepo or multi-language project, each job may need to be split into per-package matrix strategies — reassess sizing accordingly once the repository structure is confirmed in Phase 1.
+- [ ] [S] Update `README.md` to add a "CI Status" section with badge markdown for the `ci.yml` workflow and `security-scan.yml` workflow pointing to the correct repository path
+- [ ] [XS] Update `AGENTS.md` stack table to reflect that GitHub Actions CI is now active with lint, test, and security-scan jobs, replacing the placeholder row
+- [ ] [XS] Merge the feature branch `ci/github-actions-pipeline` to `main` via pull request after all required status checks pass
+- [ ] [XS] Verify the first post-merge run of `security-scan.yml` on `main` completes successfully and the weekly cron schedule is visible in the Actions tab
