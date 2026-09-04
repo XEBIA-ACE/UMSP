@@ -1,79 +1,54 @@
 # TASKS — Migrate Legacy SQLAlchemy Query API Calls to 2.0 `select()` Style
 
-> **Scope notice:** The provided codebase is a Java/Spring Boot + Node.js/Express monorepo with no Python or SQLAlchemy components present. The tech analysis summary describes the migration goal as a SQLAlchemy 2.0 modernisation, but no SQLAlchemy source files, Python runtime, or related dependencies appear anywhere in the supplied context. The tasks below are therefore scoped strictly to what *can* be grounded in the provided source — which means this document records the investigation and remediation steps that would be required if SQLAlchemy code were discovered, and flags the mismatch as a prerequisite blocker.
+> **Scope notice:** The provided codebase is a Java/Spring Boot + Node.js/Express monorepo with no Python or SQLAlchemy components present in any source file, configuration, dependency manifest, or AGENTS.md stack table. There are no SQLAlchemy Query API calls to migrate in this repository.
+>
+> The tasks below are therefore written as a **preparatory investigation and no-op confirmation workflow** — the only honest work that can be grounded in the provided context.
 
 ---
 
 ## Prerequisites
 
-- [ ] [XS] Confirm the target repository for this migration by searching the monorepo root (`user-payment-service/`) for any Python source files (`*.py`) or `requirements.txt` / `pyproject.toml` / `setup.cfg` files — none are present in the supplied context; work cannot proceed until the correct repository is identified
-- [ ] [XS] Verify SQLAlchemy is a declared dependency by locating a `requirements.txt`, `pyproject.toml`, or `setup.cfg` that lists `sqlalchemy` — no such file exists in the provided source tree; this is a hard blocker
-- [ ] [XS] Confirm the installed SQLAlchemy version is ≥ 1.4 (the minimum that ships the 2.0-style `select()` API alongside the legacy `Query` API) by running `pip show sqlalchemy` in the target environment
-- [ ] [XS] Ensure Python runtime version is ≥ 3.8 (required by SQLAlchemy 2.x) by running `python --version` in the target environment
-- [ ] [XS] Confirm read/write access to the repository branch containing the Python service and that a feature branch can be created from `main`
+N/A — not applicable to this task.
+
+No Python runtime, pip/poetry/uv tooling, or SQLAlchemy dependency is declared anywhere in the provided source context (`user-management/package.json`, `payment-service/pom.xml`, `AGENTS.md` stack table, `docker-compose.yml`). There are no environment or tooling prerequisites that can be specified without inventing scope absent from the analysis.
 
 ---
 
 ## Phase 1 — Preparation
 
-N/A — not applicable to this task until the correct Python/SQLAlchemy repository is identified (see Prerequisites blockers above).
-
-> Once the repository is confirmed, the following preparation tasks apply:
-
-- [ ] [XS] Create feature branch `migrate/sqlalchemy-2-select-style` from `main` in the target Python service repository
-- [ ] [S] Run `grep -rn "\.query\b\|session\.query" --include="*.py" .` across the entire Python service source tree to produce a complete inventory of legacy `Query` API call sites and record results in `migration-inventory.md`
-- [ ] [XS] Capture the current test suite pass/fail baseline by running the existing test command (e.g. `pytest --tb=short -q`) and saving output to `baseline-test-results.txt`
-- [ ] [XS] Record current test coverage baseline by running `pytest --cov --cov-report=term-missing -q` and saving output to `baseline-coverage.txt`
-- [ ] [XS] Enable SQLAlchemy 2.0 deprecation warnings as errors in the test configuration (e.g. set `SQLALCHEMY_WARN_20=1` environment variable or add `filterwarnings = error::sqlalchemy.exc.RemovedIn20Warning` to `pytest.ini` / `pyproject.toml [tool.pytest.ini_options]`) so that any remaining legacy calls surface as test failures
+- [ ] [XS] Audit all dependency manifests for SQLAlchemy references in `user-management/package.json` and `payment-service/pom.xml` to confirm no Python/SQLAlchemy dependency is present or transitively pulled in
+- [ ] [XS] Search the entire repository for legacy Query API patterns (`session.query(`, `.filter(`, `.first(`, `.all(`) across all files in `user-management/src/` and `payment-service/src/` to confirm zero occurrences before declaring scope complete
 
 ---
 
 ## Phase 2 — Core Upgrade
 
-N/A — not applicable to this task: no Python source files, SQLAlchemy models, repository classes, or session-management code are present in the provided context. The Java persistence layer uses Spring Data JPA / Hibernate (`InMemoryPaymentRepository.java`) and the Node.js layer uses no ORM. No SQLAlchemy `Query` API call sites exist in the supplied source tree to migrate.
+N/A — not applicable to this task.
 
-> Once the correct repository is confirmed and the call-site inventory from Phase 1 is complete, tasks of the following form apply per affected module:
->
-> - [ ] [M] Replace all `session.query(Model).filter(...).all()` calls with `session.execute(select(Model).where(...)).scalars().all()` in `<repository_module>.py`
-> - [ ] [M] Replace all `session.query(Model).filter(...).first()` calls with `session.execute(select(Model).where(...)).scalars().first()` in `<repository_module>.py`
-> - [ ] [S] Replace all `session.query(Model).get(pk)` calls with `session.get(Model, pk)` (the 2.0-native form) in `<repository_module>.py`
-> - [ ] [S] Remove any `Query`-chained `.options()`, `.join()`, `.outerjoin()`, `.order_by()`, `.limit()`, `.offset()` calls and rewrite as equivalent `select()` clause methods in `<repository_module>.py`
-> - [ ] [XS] Remove any remaining imports of `sqlalchemy.orm.Query` that are no longer referenced after migration in all affected modules
+No SQLAlchemy models, session factories, repository classes, or Query API call sites exist in the provided source files (`InMemoryPaymentRepository.java`, `UserController.js`, `AuthController.js`, or any other listed module). No migration tasks can be generated without fabricating targets absent from the codebase.
 
 ---
 
 ## Phase 3 — Testing & Validation
 
-N/A — not applicable to this task: no test files targeting SQLAlchemy repository classes exist in the provided context (`PaymentApplicationServiceTest.java`, `PaymentControllerTest.java`, `HealthControllerTest.java`, and `health.test.js` are all unrelated to SQLAlchemy).
+N/A — not applicable to this task.
 
-> Once the correct repository is confirmed, the following validation tasks apply:
-
-- [ ] [S] Run the full test suite with `SQLALCHEMY_WARN_20=1 pytest --tb=short -q` and confirm zero `RemovedIn20Warning` deprecation errors remain
-- [ ] [XS] Compare test results against `baseline-test-results.txt` and confirm no regressions in pass/fail counts
-- [ ] [XS] Compare coverage report against `baseline-coverage.txt` and confirm coverage has not decreased for any migrated module
-- [ ] [S] Execute any integration or end-to-end tests that exercise database query paths and confirm all pass against the target database (PostgreSQL 15 per AGENTS.md stack table, if applicable to the Python service)
+No SQLAlchemy-backed query paths exist to regression-test. Existing test suites (`PaymentApplicationServiceTest.java`, `PaymentControllerTest.java`, `HealthControllerTest.java`, `health.test.js`) cover Java/Spring and Node.js layers only and are unaffected by this migration goal.
 
 ---
 
 ## Phase 4 — CI/CD & Infrastructure
 
-N/A — not applicable to this task: the CI/CD pipeline defined in `.github/workflows/ci.yml` and `security-scan.yml` targets the Java and Node.js services only. No Python build steps, linting, or test stages are present in the provided pipeline context.
+N/A — not applicable to this task.
 
-> Once the correct repository is confirmed, the following CI task applies:
-
-- [ ] [XS] Add `SQLALCHEMY_WARN_20=1` as a CI environment variable in the relevant `.github/workflows/` job step that runs the Python test suite, so the deprecation-as-error gate is enforced on every pull request
+No Python build steps, `pip install`, or SQLAlchemy version pins appear in `.github/workflows/ci.yml`, `docker-compose.yml`, or any Dockerfile referenced in the provided context.
 
 ---
 
 ## Phase 5 — Documentation & Rollout
 
-N/A — not applicable to this task: no Python service `CHANGELOG`, runbook, or deployment documentation is present in the provided context (`README.md` and `AGENTS.md` cover only the Java and Node.js services).
-
-> Once the correct repository is confirmed, the following documentation tasks apply:
-
-- [ ] [XS] Add a `CHANGELOG` entry in the Python service documenting the SQLAlchemy Query API → 2.0 `select()` migration, referencing the affected modules identified in `migration-inventory.md`
-- [ ] [XS] Remove the `SQLALCHEMY_WARN_20=1` environment variable and `filterwarnings` entry added during preparation (Phase 1) once SQLAlchemy is fully upgraded to 2.x and the legacy warning filter is no longer needed
+- [ ] [XS] Update `AGENTS.md` stack table to explicitly document that no Python/SQLAlchemy layer exists in this repository, preventing future misrouted migration tickets
 
 ---
 
-> **Action required before any coding begins:** The task as specified cannot be executed against the provided codebase. The repository supplied contains no Python files, no SQLAlchemy dependency declarations, and no ORM query code of any kind. The engineering lead or task requester must supply the correct Python service repository path before this task document can be fully populated.
+> **Recommendation:** Re-run tech analysis against the correct target repository that contains the Python service with SQLAlchemy usage. The current context contains zero SQLAlchemy call sites; generating migration tasks against it would produce entirely fabricated work.
