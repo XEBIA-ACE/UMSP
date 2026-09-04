@@ -1,0 +1,4 @@
+# Runtime: Python 3.10 (see pyproject.toml requires-python)
+# Test/lint tooling
+pytest>=8.0
+flake8>=7.0
