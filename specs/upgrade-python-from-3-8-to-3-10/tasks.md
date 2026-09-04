@@ -1,0 +1,10 @@
+# TASKS: Upgrade Python from 3.8 to 3.10 (JTT-3255)
+
+- [x] T1 Pin Docker base image to `python:3.10-slim` (`Dockerfile`)
+- [x] T2 Declare `requires-python = ">=3.10"` and pytest config (`pyproject.toml`)
+- [x] T3 Pin CI to Python 3.10 for lint/test/build/SAST (`.github/workflows/ci.yml`)
+- [x] T4 Add runtime guard so the app refuses to start on < 3.10 (`umsp/__init__.py`)
+- [x] T5 Add deprecated-feature scanner (`migration/CompatibilityHelper.py --scan .`)
+- [x] T6 Add smoke tests covering acceptance criteria 1-3 (`tests/SmokeTest.py`)
+- [x] T7 Verify locally on Python 3.10.12: flake8, compileall, pytest (25 passed), build, scanner (0 findings)
+- [ ] T8 Merge and remove any remaining 3.8 runners/images from deployment environments (TODO: owner)
