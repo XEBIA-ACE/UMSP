@@ -2,60 +2,75 @@
 
 ## Summary
 
-This spec covers the addition of `pytest-cov` as a development dependency to the `user-management` Node.js service's test infrastructure to enable structured test coverage reporting. Based on the provided source context, the `user-management` service already uses Jest with coverage enabled via `jest --coverage` and a `coverageDirectory` configuration. The relevant Python testing tooling (`pytest-cov`) referenced in the task title does not match the actual stack (Node.js 20 / Jest 29). This spec therefore addresses coverage reporting improvements within the **existing Jest-based test setup** for the `user-management` service, as that is the only test infrastructure present in the provided context. Any Python/pytest scope is marked as TODO pending clarification.
+This spec covers the addition of `pytest-cov` as a development dependency to the `user-management` Node.js service's test infrastructure to enable structured test coverage reporting. Based on the provided source context, the `user-management` service already uses Jest with coverage enabled via `jest --coverage` and a `coverageDirectory` configuration. The relevant Python testing tooling (`pytest-cov`) referenced in the task title does not match the actual stack (Node.js 20 / Jest 29.7.0). This spec therefore addresses coverage reporting improvements within the **existing Jest-based test setup** for the `user-management` service, as that is the only test infrastructure present in the provided context. Any Python/pytest scope is marked as TODO pending clarification.
 
 ---
 
 ## Motivation
 
-- The `user-management` service already invokes `jest --coverage` in the `test` npm script, but there is no enforced coverage threshold, no designated reporter format beyond Jest's default, and no artifact output configuration suitable for CI consumption (e.g., lcov, Cobertura, or JSON summary).
-- Without a structured coverage report format, CI pipelines cannot gate merges on coverage regressions or publish coverage badges/dashboards.
-- Upgrade urgency: **medium** (per tech analysis).
-- The existing `devDependencies` in `package.json` include `jest@^29.7.0` but no coverage reporter plugins or threshold enforcement, representing addressable tech debt.
+- The `user-management` service already invokes `jest --coverage` in the `test` npm script, but the current Jest configuration does not specify coverage reporters, coverage thresholds, or output formats beyond a bare `coverageDirectory` setting.
+- Without explicit reporter configuration, coverage output is limited to the default terminal summary and is not consumable by CI tooling (e.g., GitHub Actions coverage annotations, Codecov, or SonarQube).
+- Upgrade urgency: **medium** — no EOL or CVE driver; the gap is a tech-debt item preventing visibility into untested code paths across use cases such as `RecoverPassword`, `RegisterUser`, `LoginUser`, and their associated adapters.
+- The `collectCoverageFrom` field in `package.json` already scopes collection to `src/**/*.js` excluding `src/__tests__/**`, which is correct but incomplete without threshold enforcement.
 
 ---
 
 ## Current State
 
-The following configuration elements in `user-management/package.json` are directly affected:
+The following configuration elements in `user-management/package.json` govern the existing test and coverage behaviour:
 
-| Element | Current Value |
-|---|---|
-| `scripts.test` | `"jest --coverage"` |
-| `devDependencies.jest` | `^29.7.0` |
-| `jest.coverageDirectory` | `"coverage"` |
-| `jest.collectCoverageFrom` | `["src/**/*.js", "!src/__tests__/**"]` |
-| `jest.coverageReporters` | Not set (Jest default: `text`, `lcov`, `clover`) |
-| `jest.coverageThreshold` | Not set |
+| Config Key | Current Value | Effect |
+|---|---|---|
+| `scripts.test` | `"jest --coverage"` | Runs all tests and collects coverage |
+| `jest.testEnvironment` | `"node"` | Node.js test environment |
+| `jest.testMatch` | `["**/src/__tests__/**/*.test.js"]` | Matches test files under `src/__tests__/` |
+| `jest.coverageDirectory` | `"coverage"` | Output directory for coverage artefacts |
+| `jest.collectCoverageFrom` | `["src/**/*.js", "!src/__tests__/**"]` | Source files included in coverage collection |
 
-Existing test files covered by `collectCoverageFrom`:
+**Existing test files covered by collection:**
 - `src/__tests__/health.test.js` — integration tests for `GET /api/health`
 - `src/__tests__/loginUser.test.js` — unit tests for `LoginUser` use case
 - `src/__tests__/registerUser.test.js` — unit tests for `RegisterUser` use case
 
-Source modules included in coverage collection:
+**Notable source files currently included in collection but lacking dedicated tests:**
 - `src/application/usecases/RecoverPassword.js`
-- `src/application/usecases/RegisterUser.js`
-- `src/adapters/outbound/persistence/InMemoryUserRepository.js`
-- `src/adapters/outbound/auth/JwtAuthAdapter.js`
 - `src/adapters/inbound/http/controllers/AuthController.js`
 - `src/adapters/inbound/http/routes/authRoutes.js`
+- `src/adapters/outbound/auth/JwtAuthAdapter.js`
+- `src/adapters/outbound/persistence/InMemoryUserRepository.js`
 
-> **Note:** The `payment-service` uses Java 17 / Spring Boot 3.2 / JUnit 5 / Mockito and has no relationship to `pytest-cov` or Jest. It is out of scope for this task.
+**devDependencies (current):**
 
-> **TODO:** Confirm whether the task title "Add pytest-cov" refers to a Python service not present in the provided source context. If a Python service exists elsewhere in the monorepo, a separate spec is required.
+| Package | Version |
+|---|---|
+| `jest` | `^29.7.0` |
+| `supertest` | `^6.3.3` |
+| `nodemon` | `^3.0.2` |
+
+There is no `coverageReporters`, `coverageThreshold`, or `coverageProvider` key present in the Jest configuration block.
 
 ---
 
 ## Proposed Changes
 
+> **Note:** The task title references `pytest-cov`, a Python tool. The codebase is Node.js/Jest. This spec addresses coverage reporting configuration within Jest. If a Python service exists outside the provided context and requires `pytest-cov`, that scope is marked TODO.
+
+### user-management — Jest coverage configuration
+
 | Component | Before | After | Breaking? |
 |---|---|---|---|
-| `jest.coverageReporters` (package.json) | Not configured (Jest defaults) | Explicitly set to include `text`, `lcov`, and `json-summary` reporters | N |
-| `jest.coverageThreshold` (package.json) | Not configured (no enforcement) | Minimum thresholds defined for `branches`, `functions`, `lines`, and `statements` | N |
-| `devDependencies` (package.json) | No additional coverage tooling | TODO: Confirm whether any supplementary Jest coverage plugin (e.g., `jest-junit` for CI XML output) is required | N |
-| `scripts.test` (package.json) | `"jest --coverage"` | Unchanged — coverage flags already present; threshold enforcement is declarative via Jest config | N |
-| CI pipeline (`ci.yml`) | TODO: Current coverage artifact upload behaviour unknown | Coverage artifact (lcov or json-summary) uploaded and optionally enforced as a merge gate | N |
+| `jest.coverageReporters` | Not set (defaults to `["text", "lcov"]`) | Explicitly set to `["text", "lcov", "html", "json-summary"]` | N |
+| `jest.coverageThreshold` | Not set (no enforcement) | Global thresholds added for lines, functions, branches, statements | N |
+| `jest.coverageProvider` | Not set (defaults to `"babel"`) | Explicitly set to `"v8"` for accurate native coverage | N |
+| `scripts.test` | `"jest --coverage"` | Unchanged — `--coverage` flag already present | N |
+| `scripts.test:ci` | Not present | Added as a dedicated CI script variant (e.g., with `--ci` flag) | N |
+
+### Python/pytest-cov scope
+
+| Component | Before | After | Breaking? |
+|---|---|---|---|
+| Python test runner | TODO — no Python service identified in provided context | TODO | TODO |
+| `pytest-cov` dependency | TODO | TODO | TODO |
 
 ---
 
@@ -63,27 +78,28 @@ Source modules included in coverage collection:
 
 | Change | Impact | Migration Path |
 |---|---|---|
-| Adding `coverageThreshold` | Existing test runs that fall below the configured threshold will fail the `npm test` command | Review current coverage percentages before setting thresholds; set initial thresholds at or below the current measured baseline, then ratchet upward incrementally |
-| Adding explicit `coverageReporters` | Replaces Jest's implicit defaults; `clover` format will no longer be generated unless explicitly listed | Any downstream tooling consuming `coverage/clover.xml` must be updated to use `lcov` or `json-summary` instead — TODO: confirm whether any such tooling exists |
-| CI artifact path change | TODO: Unknown — depends on current CI configuration in `.github/workflows/ci.yml` | TODO |
+| Adding `coverageThreshold` | Tests will fail in CI if coverage drops below the configured threshold | Thresholds must be set at or below current measured coverage levels on first introduction; teams must raise thresholds incrementally |
+| Switching `coverageProvider` to `"v8"` | Coverage numbers may differ slightly from the previous Babel-instrumented output | Review coverage report after first run; adjust thresholds if needed; no source changes required |
+| Adding `"json-summary"` reporter | Generates an additional `coverage/coverage-summary.json` artefact | Ensure `.gitignore` includes the `coverage/` directory (TODO: confirm current `.gitignore` state) |
+| `pytest-cov` addition | TODO — Python service not identified in provided context | TODO |
 
 ---
 
 ## Acceptance Criteria
 
-1. **Given** the `user-management` service has all dependencies installed, **when** `npm test` is executed, **then** a `coverage/` directory is produced containing at minimum an `lcov.info` file and a `coverage-summary.json` file.
+1. **Given** the `user-management` service with its existing test suite, **when** `npm test` is executed, **then** a `coverage/` directory is produced containing at minimum `lcov.info`, `index.html`, and `coverage-summary.json` files.
 
-2. **Given** the Jest configuration includes `coverageReporters` with `lcov` and `json-summary`, **when** `npm test` completes successfully, **then** the `coverage/lcov-report/index.html` file is present and readable in a browser without errors.
+2. **Given** the Jest configuration with `coverageProvider` set to `"v8"`, **when** `npm test` is executed, **then** the terminal output displays a per-file coverage table covering all files matched by `collectCoverageFrom` (`src/**/*.js` excluding `src/__tests__/**`).
 
-3. **Given** a `coverageThreshold` is configured for `lines` at the agreed minimum percentage, **when** `npm test` is run against the current test suite, **then** the command exits with code `0` (all thresholds met).
+3. **Given** a `coverageThreshold` is configured with a global line-coverage minimum, **when** `npm test` is executed and the measured line coverage is below that threshold, **then** the Jest process exits with a non-zero exit code and prints a threshold-violation message.
 
-4. **Given** a source file under `src/**/*.js` (excluding `src/__tests__/**`) has a code path that is not exercised by any test, **when** `npm test` is run and the uncovered lines cause the `lines` threshold to be breached, **then** the command exits with a non-zero code and Jest prints a coverage threshold failure message.
+4. **Given** the `coverageThreshold` is configured and the full test suite passes with coverage at or above the threshold, **when** `npm test` is executed in CI, **then** the process exits with code `0`.
 
-5. **Given** the CI pipeline runs on a pull request, **when** `npm test` executes in CI, **then** the coverage report artifact is uploaded and accessible from the workflow run summary without manual steps.
+5. **Given** the `lcov.info` artefact is produced in `coverage/`, **when** a CI step uploads it to a coverage reporting service (e.g., Codecov or GitHub Actions coverage summary), **then** the upload completes without error and a coverage percentage is reported against the pull request.
 
-6. **Given** the `collectCoverageFrom` pattern `["src/**/*.js", "!src/__tests__/**"]` is in effect, **when** coverage is collected, **then** all use-case files (`RecoverPassword.js`, `RegisterUser.js`, etc.) appear in the coverage report, and no test helper files from `src/__tests__/` appear.
+6. **Given** the `RecoverPassword` use case (`src/application/usecases/RecoverPassword.js`) is included in `collectCoverageFrom`, **when** `npm test` is executed, **then** the coverage report includes a row for `RecoverPassword.js` showing its current measured coverage (even if zero), confirming the file is not silently excluded.
 
-7. **Given** the `coverageDirectory` is set to `"coverage"`, **when** `npm test` runs, **then** all coverage output files are written exclusively to the `coverage/` directory and no coverage files are written to the project root or `src/`.
+7. **Given** the `pytest-cov` addition (Python scope — TODO), **when** the Python test suite is executed, **then** a coverage report is generated and the process exits non-zero if coverage falls below the configured threshold. *(Criterion pending Python service identification.)*
 
 ---
 
@@ -91,9 +107,9 @@ Source modules included in coverage collection:
 
 | # | Question | Owner | Due Date |
 |---|---|---|---|
-| 1 | Does "Add pytest-cov" refer to a Python service not present in the provided source context? If so, which service, and where is its source located? | TODO | TODO |
-| 2 | What are the current measured coverage percentages (lines, branches, functions, statements) for the `user-management` service, to be used as the baseline for initial threshold values? | TODO | TODO |
-| 3 | Is there an existing `.github/workflows/ci.yml` that uploads coverage artifacts, and if so, what format does it currently expect? | TODO | TODO |
-| 4 | Is a machine-readable XML coverage format (e.g., Cobertura) required for integration with a code quality dashboard (e.g., SonarQube, Codecov, Coveralls)? | TODO | TODO |
-| 5 | Should coverage thresholds be enforced as a hard merge gate in CI, or only reported as a warning? | TODO | TODO |
-| 6 | Is `jest-junit` or a similar JUnit XML reporter needed for CI test result reporting in addition to coverage? | TODO | TODO |
+| 1 | The task title specifies `pytest-cov` (a Python tool), but the entire codebase provided is Node.js and Java. Is there a Python service or component not included in the provided context that requires `pytest-cov`? | TODO | TODO |
+| 2 | What are the target coverage thresholds (lines, branches, functions, statements) to enforce for the `user-management` service? Should they be set to current measured values initially? | TODO | TODO |
+| 3 | Is the `coverage/` directory currently listed in `.gitignore`? The `.gitignore` file was not provided in the context. | TODO | TODO |
+| 4 | Should the `payment-service` (Java/JUnit 5) also have coverage reporting improvements (e.g., JaCoCo configuration) as part of this effort, or is scope limited to the Node.js service? | TODO | TODO |
+| 5 | Is there a CI workflow file (`.github/workflows/ci.yml` is referenced in `AGENTS.md`) that needs to be updated to upload the `lcov.info` artefact to a coverage service? The workflow file was not provided. | TODO | TODO |
+| 6 | Should `coverageProvider` be set to `"v8"` (native) or remain as the default `"babel"` instrumentation? This affects accuracy and performance. | TODO | TODO |
