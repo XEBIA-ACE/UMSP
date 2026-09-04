@@ -1,4 +1,4 @@
-package com.payments.adapters.inbound.rest;
+package.payments.adapters.inbound.rest;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,8 +45,8 @@ class HealthControllerTest {
         @Primary
         SecurityFilterChain testSecurityFilterChain(HttpSecurity http) throws Exception {
             http
-                .csrf(csrf -> csrf.disable())
-                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+                .csrf().disable()
+                .authorizeRequests().anyRequest().permitAll();
             return http.build();
         }
     }
