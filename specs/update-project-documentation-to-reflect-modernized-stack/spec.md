@@ -2,84 +2,116 @@
 
 ## Summary
 
-This spec covers the update of project documentation to accurately reflect the modernized technology stack following the completion of the stack modernization effort. The expected outcome is that all documentation — including setup guides, architecture references, dependency lists, and contribution guidelines — is consistent with the current runtime, language, build tooling, and framework versions in use, removing references to deprecated or superseded components.
+This spec covers the updates required to bring the project's documentation (`README.md` and `AGENTS.md`) into alignment with the actual modernized stack as implemented in the codebase. The current `README.md` contains at least one confirmed inaccuracy — it lists the payment service runtime as **Java 17 · Spring Boot 3.2**, while `AGENTS.md` and the source code reflect **Java 21 (LTS) · Spring Boot 3.x**. Additionally, the `README.md` describes a two-service layout (`user-management` / `payment-service`) that does not fully match the three-component monorepo structure (`gateway/`, `user-service/`, `payment-service/`) documented in `AGENTS.md`. The expected outcome is a single, consistent, accurate set of documentation that correctly describes the runtime versions, service topology, architecture, and environment variables for all components.
+
+---
 
 ## Motivation
 
-Following a stack modernization effort (upgrade urgency: **medium**), project documentation has fallen out of sync with the actual technology stack. Outdated documentation creates the following risks:
+- **Version inaccuracy (medium urgency):** `README.md` states `Java 17 · Spring Boot 3.2` for the payment service. `AGENTS.md` and the actual stack table specify **Java 21 LTS** and **Spring Boot 3.x**. Stale version references mislead contributors, cause incorrect JDK toolchain selection during onboarding, and can produce mismatched Docker base images in CI.
+- **Structural mismatch:** `README.md` describes two services (`user-management`, `payment-service`) and omits the **Node.js/Express API Gateway** (`gateway/`) that is fully documented in `AGENTS.md` and present in the project structure. This causes confusion about the actual request path and port assignments.
+- **Incomplete environment variable documentation:** `README.md` documents env vars for only two services; the gateway/BFF layer (`gateway/`) has its own configuration surface (OAuth2, Redis, rate limiting, upstream service URLs) that is not documented.
+- **Tech debt — in-memory adapters undocumented:** Both `InMemoryPaymentRepository` and `InMemoryUserRepository` are production-visible adapters. The documentation does not note that these are development/test stubs and must be replaced before production deployment.
+- **Upgrade urgency:** Medium — no EOL or CVE driver, but inaccurate documentation actively impedes onboarding and correct CI/CD configuration.
 
-- **Developer onboarding friction:** New contributors follow stale setup instructions, leading to environment mismatches and wasted time.
-- **Operational risk:** Runbooks and deployment guides referencing old tooling versions may cause incorrect procedures to be followed in production.
-- **Compliance and audit exposure:** Documentation that does not reflect the actual runtime or dependency versions in use can create discrepancies during security audits or compliance reviews.
-- **Tech debt accumulation:** Undocumented modernization changes make future upgrades harder to scope and reason about.
-
-> **Note:** Specific version numbers, EOL dates, and CVE references are not available in the provided tech analysis (language, runtime, build tool, and framework details are listed as unknown). See [Open Questions](#open-questions) for the items that must be resolved before documentation can be fully updated.
+---
 
 ## Current State
 
-The current documentation reflects the **pre-modernization** stack. The specific components affected are not fully enumerable from the provided context, but the documentation scope typically includes:
+### README.md — Affected Elements
 
-- **README / Getting Started guide:** References to language version, runtime version, and local setup prerequisites.
-- **Dependency manifest documentation:** Any human-readable descriptions of key libraries and their versions.
-- **Build and CI documentation:** Instructions tied to the previous build tool and its configuration keys.
-- **Architecture documentation:** Diagrams or prose describing framework choices and integration patterns.
-- **Contribution guide:** Environment setup steps, linting rules, and test runner invocations tied to the old stack.
-- **Changelog / release notes:** History of changes that may reference old version numbers without noting the modernization.
+| Element | Current Value | Issue |
+|---|---|---|
+| Payment service stack cell | `Java 17 · Spring Boot 3.2` | Incorrect; should be Java 21 · Spring Boot 3.x per AGENTS.md |
+| Service table | Two rows: `user-management` (port 3000), `payment-service` (port 8080) | Missing `gateway` BFF layer; directory names differ from actual layout |
+| Quick-start paths | `cd user-management`, `cd payment-service` | Directory names do not match `gateway/`, `user-service/`, `payment-service/` in AGENTS.md |
+| Environment variables section | Documents `user-management` and `payment-service` vars only | No env vars documented for `gateway/` (OAuth2, Redis, upstream URLs, rate limiter) |
+| Docker Compose snippet | References `./user-management` and `./payment-service` build contexts | Build context paths are incorrect |
+| Architecture diagram | Not present in README | AGENTS.md has no diagram either; hexagonal architecture description exists but gateway layer is absent |
+| In-memory adapter caveat | Not mentioned | `InMemoryPaymentRepository` and `InMemoryUserRepository` are undocumented as dev-only stubs |
 
-Specific class names, config keys, and schema elements affected are **TODO** — pending identification of the actual stack components from the tech analysis.
+### AGENTS.md — Affected Elements
+
+| Element | Current Value | Issue |
+|---|---|---|
+| Stack table | Accurate per source code | Authoritative reference; README must be reconciled to this |
+| Project structure tree | Shows `gateway/`, `user-service/`, `payment-service/` | README does not reflect this three-component layout |
+| `gateway/src/config/oauth2.js` | Listed in structure | Not documented in README env vars section |
+
+### Key Source Artefacts Referenced
+
+- `user-management/package.json` — declares `express ^4.18.2`, `jest ^29.7.0`, `supertest ^6.3.3`, `jsonwebtoken ^9.0.2`, `bcryptjs ^2.4.3`, `uuid ^9.0.0`, `nodemailer ^6.9.7`
+- `payment-service/.../StripeGatewayAdapter.java` — uses `stripe-java` SDK; `@Value("${stripe.api.key}")`
+- `payment-service/.../PayPalGatewayAdapter.java` — uses `@Value("${paypal.client.id}")`, `${paypal.client.secret}`, `${paypal.mode:sandbox}`
+- `payment-service/.../EmailNotificationAdapter.java` — uses `@Value("${notification.email.enabled:false}")`
+- `payment-service/.../InMemoryPaymentRepository.java` — `ConcurrentHashMap`-backed stub; Javadoc explicitly states "Replace with database-backed adapter for production"
+- `user-management/.../InMemoryUserRepository.js` — `Map`-backed stub; same caveat applies
+- `gateway/src/config/oauth2.js` — OAuth2 client configuration (env vars TODO — not visible in provided context)
+
+---
 
 ## Proposed Changes
 
-For each documentation artifact, the following categories of changes apply:
-
 | Component | Before | After | Breaking? |
 |---|---|---|---|
-| README / Getting Started | References pre-modernization language/runtime version | Updated to reflect current language/runtime version | N — documentation only |
-| Prerequisite / setup guide | Lists old tooling installation steps | Lists updated tooling and version requirements | N — documentation only |
-| Build tool documentation | Describes old build tool commands and config keys | Describes new build tool commands and config keys | N — documentation only |
-| Framework references | Names and versions of pre-modernization frameworks | Names and versions of modernized frameworks | N — documentation only |
-| Architecture docs / diagrams | Reflects old stack components and integration patterns | Updated to reflect modernized stack components | N — documentation only |
-| Contribution guide | Environment setup tied to old stack | Environment setup tied to new stack | N — documentation only |
-| Changelog / release notes | No entry for modernization | New entry documenting the stack upgrade and rationale | N — documentation only |
-| Dependency descriptions | Describes deprecated or superseded libraries | Describes current libraries and their roles | N — documentation only |
+| `README.md` — service stack table | `Java 17 · Spring Boot 3.2` for payment service | `Java 21 LTS · Spring Boot 3.x` | N |
+| `README.md` — service table rows | Two services: `user-management` (3000), `payment-service` (8080) | Three components: `gateway` (3000), `user-service` (TODO port), `payment-service` (8080) | N |
+| `README.md` — quick-start directory paths | `cd user-management`, `cd payment-service` | `cd gateway`, `cd user-service`, `cd payment-service` | N |
+| `README.md` — Docker Compose build contexts | `./user-management`, `./payment-service` | `./gateway`, `./user-service`, `./payment-service` | N |
+| `README.md` — environment variables section | Two services documented | Three components documented; gateway env vars added | N |
+| `README.md` — in-memory adapter notice | Not present | Add a clearly labelled "Development / Test Adapters" notice for `InMemoryPaymentRepository` and `InMemoryUserRepository` | N |
+| `README.md` — architecture section | Hexagonal diagram present; gateway layer absent | Update diagram/description to include the Node.js gateway as the inbound entry point | N |
+| `AGENTS.md` — stack table | Accurate | No changes required; serves as the authoritative source | N |
 
-> All specific "Before" and "After" version values are **TODO** pending resolution of the open questions below.
+---
 
 ## Compatibility & Breaking Changes
 
-This task is documentation-only. No runtime interfaces, APIs, data models, or application behaviours are being changed as part of this spec. There are no breaking changes to callers or consumers of the software itself.
+Documentation-only changes carry no runtime breaking changes. The table below addresses documentation consumer impact.
 
-| Change | Impact | Migration Path |
+| Change | Impact on Consumers | Migration Path |
 |---|---|---|
-| Removal of references to old stack versions from docs | Readers following old docs will need to use updated instructions | Updated docs serve as the migration path; old docs should be archived or clearly marked superseded |
-| Updated setup prerequisites | Contributors with environments built from old docs may need to update their local setup | Provide a clear "upgrading your local environment" section in the updated contribution guide |
+| Directory names corrected in README quick-start | Developers following old README paths (`cd user-management`) will get a "directory not found" error if they cloned the repo and used the old instructions | README is updated to use correct paths; no code change required |
+| Java version corrected to 21 | CI pipelines or local toolchains pinned to Java 17 based on README may fail to build | Developers must update their local JDK and any CI `java-version` matrix entries to 21; this is a pre-existing mismatch, not introduced by this spec |
+| Gateway service added to Docker Compose docs | Developers running only two services per old README will not start the gateway | Updated Docker Compose documentation will include all three services |
+| Gateway env vars added | None — additive | N/A |
+| In-memory adapter warning added | None — informational only | N/A |
+| `user-service` port number | TODO — not present in provided context | TODO |
+| Gateway OAuth2 / Redis env var names | TODO — `gateway/src/config/index.js` and `oauth2.js` not provided in context | TODO |
+
+---
 
 ## Acceptance Criteria
 
-1. **Given** the modernization is complete, **when** a reviewer reads the README, **then** every language, runtime, and build tool version reference matches the versions actually in use in the repository (zero discrepancies).
+1. **Given** the updated `README.md`, **when** a reviewer reads the service stack table, **then** the payment service row must display `Java 21 LTS` and `Spring Boot 3.x` — not `Java 17` or `Spring Boot 3.2`.
 
-2. **Given** the updated Getting Started guide, **when** a new contributor follows the setup instructions from a clean environment, **then** they can successfully build and run the project without requiring any steps not described in the documentation.
+2. **Given** the updated `README.md`, **when** a reviewer counts the rows in the services table, **then** there must be exactly three rows corresponding to `gateway`, `user-service`, and `payment-service`, each with its correct port number.
 
-3. **Given** the updated contribution guide, **when** a contributor follows the documented test and lint commands, **then** all commands execute successfully against the current stack without modification.
+3. **Given** the updated `README.md` quick-start instructions, **when** a developer executes the documented `cd` command for each service on a freshly cloned repository, **then** each command must resolve to an existing directory without error.
 
-4. **Given** the updated architecture documentation, **when** a reviewer compares the documented framework and component list against the actual dependency manifest, **then** no framework or major dependency present in the manifest is absent from the documentation, and no removed dependency is still referenced as current.
+4. **Given** the updated `README.md` Docker Compose example, **when** a reviewer compares the `build:` context paths against the actual repository directory structure, **then** all three build contexts must match existing top-level directories.
 
-5. **Given** the changelog, **when** a reviewer reads the release notes, **then** there is at least one entry that explicitly records the stack modernization, names the components that changed, and references the old and new versions.
+5. **Given** the updated `README.md` environment variables section, **when** a reviewer cross-references each documented variable against the source files (`StripeGatewayAdapter.java`, `PayPalGatewayAdapter.java`, `EmailNotificationAdapter.java`, `user-management/package.json`, and gateway config), **then** every `@Value`-injected property key and every `process.env` reference present in source must have a corresponding row in the documentation.
 
-6. **Given** any documentation page that previously referenced a deprecated or EOL component, **when** a reviewer audits those pages post-update, **then** zero references to the deprecated component remain without an explicit "historical note" label.
+6. **Given** the updated `README.md`, **when** a reviewer searches for references to `InMemoryPaymentRepository` or `InMemoryUserRepository`, **then** the document must contain a clearly labelled notice stating these adapters are for development and testing only and must be replaced with a persistent-store adapter before production deployment.
 
-7. **Given** the CI pipeline, **when** a documentation linting or link-checking job runs against the updated docs, **then** it exits with zero errors (no broken internal links, no broken external links to versioned resources that no longer exist).
+7. **Given** the updated `README.md` and `AGENTS.md`, **when** a reviewer compares the Java runtime version stated in both documents, **then** both must agree on `Java 21 LTS`.
+
+8. **Given** the updated `README.md` architecture section, **when** a reviewer reads the service topology description, **then** the Node.js/Express API Gateway must be identified as the inbound entry point that proxies to `user-service` and `payment-service`.
+
+9. **Given** a CI lint or link-check job (e.g. `markdownlint`), **when** the updated documentation files are committed, **then** the job must pass with zero errors on both `README.md` and `AGENTS.md`.
+
+10. **Given** the updated `README.md` Docker Compose snippet, **when** a developer runs `docker compose up` using the documented configuration on a machine with Docker installed, **then** all three services must start and their respective health endpoints (`GET /api/health`) must return `200 OK`.
+
+---
 
 ## Open Questions
 
 | # | Question | Owner | Due Date |
 |---|---|---|---|
-| 1 | What is the specific language and language version used in the modernized stack? | TODO | TODO |
-| 2 | What is the specific runtime and runtime version used in the modernized stack? | TODO | TODO |
-| 3 | What is the build tool and its version used in the modernized stack? | TODO | TODO |
-| 4 | Which frameworks were added, removed, or upgraded as part of the modernization? What are the old and new versions? | TODO | TODO |
-| 5 | Which documentation artifacts exist in the repository (e.g., wiki, in-repo markdown, external site)? | TODO | TODO |
-| 6 | Is there an existing documentation linting or link-checking CI job, or does one need to be added? | TODO | TODO |
-| 7 | Should old/pre-modernization documentation be archived, deleted, or marked as historical? What is the retention policy? | TODO | TODO |
-| 8 | Who is the documentation owner responsible for approving the final updated content? | TODO | TODO |
-| 9 | Are there any external documentation sites (e.g., GitHub Pages, Confluence, Notion) that also need to be updated in scope? | TODO | TODO |
+| 1 | What is the correct HTTP port for `user-service` (Spring Boot user management)? The README currently only documents port 8080 for `payment-service`; `user-service` port is not visible in the provided context. | TODO | TODO |
+| 2 | What are the environment variable names used by `gateway/src/config/index.js` and `gateway/src/config/oauth2.js`? These files are listed in `AGENTS.md` but their contents were not provided, so gateway env vars cannot be fully documented. | TODO | TODO |
+| 3 | Should `AGENTS.md` be updated to add any missing detail (e.g. gateway env vars, in-memory adapter warnings), or is it intentionally a high-level agent reference only? | TODO | TODO |
+| 4 | Is the `user-management/` directory name used in the current README intentional (i.e., does a symlink or alias exist), or is it a straightforward error that should be corrected to `gateway/` and `user-service/`? | TODO | TODO |
+| 5 | Should the documentation distinguish between `Spring Boot 3.x` (as in AGENTS.md) and a specific patch version (e.g. `3.2.x`, `3.3.x`)? The `pom.xml` was not provided in context. | TODO | TODO |
+| 6 | Are there additional CI workflow steps (e.g. in `.github/workflows/ci.yml`) that reference the old directory names or Java 17 that also need updating as part of this documentation pass, or is that out of scope? | TODO | TODO |
