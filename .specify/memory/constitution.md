@@ -1,56 +1,60 @@
-# CONSTITUTION
-## GitHub Actions CI Pipeline Configuration
-
----
+# CONSTITUTION — GitHub Actions CI Pipeline
 
 ## Project Identity
 
-**Name:** GitHub Actions CI Pipeline Setup
-
-**Purpose:** Establish an automated CI pipeline using GitHub Actions that enforces code quality (lint), correctness (test), and security (scan) on every relevant code change.
-
-**High-Level Goal:** Deliver a reliable, repeatable CI pipeline that gates merges on passing lint, test, and security checks — reducing manual review burden and catching regressions early.
+**Name:** user-payment-service CI Pipeline
+**Purpose:** Configure a GitHub Actions CI pipeline that enforces code quality, test coverage, and security hygiene across both the `user-management` (Node.js 20 / Express) and `payment-service` (Java 21 / Spring Boot 3.x) microservices in a single monorepo.
+**High-level goal:** Every pull request and push to the main branch must pass lint, automated tests, and a security scan before merge is permitted.
 
 ---
 
 ## Guiding Principles
 
-1. **Prefer automated enforcement over documentation-only standards** because the tech analysis identifies medium upgrade urgency and unresolved tech debt, meaning manual processes have already proven insufficient.
-2. **Prefer fail-fast pipeline ordering (lint → test → security scan) over parallel-only execution** because surfacing cheap failures (lint) before expensive ones (tests, scans) reduces wasted CI minutes.
-3. **Prefer pinned Action versions (SHA or exact tag) over floating `@latest` references** because unpinned dependencies introduce silent breaking changes and supply-chain risk.
-4. **Prefer explicit job-level permissions over broad default permissions** because least-privilege reduces blast radius if a workflow step is compromised.
-5. **Prefer reusable workflow steps or composite actions over duplicated YAML** because maintainability is a core concern when the runtime and build tool are not yet locked down (TODO).
+1. **Prefer per-service jobs over a single monolithic job** because the two services use different runtimes (Node.js 20 and Java 21) and toolchains (npm/Jest vs. Maven/JUnit 5); conflating them increases failure blast radius and obscures root cause.
+2. **Prefer path-filtered triggers over always-on triggers** because changes to `user-management/` should not re-run the Java test suite and vice versa, keeping CI fast and resource-efficient.
+3. **Prefer secrets-based injection over hardcoded values** because the codebase handles payment credentials (Stripe, PayPal) and JWT secrets; no secret must appear in workflow YAML or logs.
+4. **Prefer fail-fast lint before test execution** because ESLint (Node.js) and Checkstyle/SpotBugs (Java) catch trivial errors cheaply; running the full test suite on broken code wastes CI minutes.
+5. **Prefer dependency audit as a mandatory gate over advisory-only** because the service processes financial transactions and user credentials, making supply-chain risk a compliance concern, not a nice-to-have.
+6. **Prefer Docker Compose test environment for integration tests** because `docker-compose.test.yml` already exists and Testcontainers requires a Docker daemon; the CI runner must support Docker-in-Docker or a Docker socket.
 
 ---
 
 ## Constraints
 
-- **Effort ceiling:** Moderate option selected; scope is limited strictly to CI pipeline configuration — no CD, infrastructure, or application code changes are in scope.
-- **Technology mandates:**
-  - Pipeline must run on GitHub Actions (not an alternative CI platform).
-  - Language, runtime, and build tool are **TODO — unknown at time of writing**; pipeline jobs must be updated once these are confirmed before the pipeline is considered complete.
-- **Scope freeze:** This constitution covers lint, test, and security scan stages only. Deployment, release, or environment promotion workflows are explicitly out of scope.
-- **Security scan tooling:** Specific scanner (e.g., CodeQL, Trivy, Snyk) is **TODO — must be selected based on confirmed language/runtime**.
+| Constraint | Detail |
+|---|---|
+| **Effort ceiling** | Moderate option — scope is limited to pipeline configuration only; no refactoring of application code. |
+| **Node.js runtime** | 20 LTS (as declared in `AGENTS.md` and `package.json`) |
+| **Java runtime** | 21 LTS (as declared in `AGENTS.md`; README states Java 17 — **TODO: confirm canonical version before finalising workflow `java-version`**) |
+| **Build tools** | npm (Node.js), Maven Wrapper `./mvnw` (Java) — no Gradle, no Yarn |
+| **CI platform** | GitHub Actions exclusively; no external CI service |
+| **Workflow files** | Must live at `.github/workflows/ci.yml` and `.github/workflows/security-scan.yml` per existing project structure |
+| **Secrets** | `JWT_SECRET`, `STRIPE_API_KEY`, `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET` must be consumed from GitHub Actions secrets; never echoed |
+| **Scope freeze** | Pipeline configuration only — no changes to application source, test files, or Docker images |
 
 ---
 
 ## Quality Standards
 
-- **Pipeline coverage:** All three stages (lint, test, security scan) must be present and non-skippable on pull requests targeting the default branch.
-- **Branch protection gate:** The CI workflow must be registered as a required status check before merge is permitted — verified in repository branch protection settings.
-- **Workflow syntax validation:** All `.github/workflows/*.yml` files must pass `actionlint` (or equivalent) with zero errors before merge.
-- **Secret handling:** Zero plaintext secrets in workflow YAML files — all credentials must reference `${{ secrets.* }}` or `${{ vars.* }}`.
-- **Documentation:** Each workflow file must include an inline comment block describing its trigger, purpose, and required secrets/variables.
-- **Review requirement:** Changes to any workflow file require at least one peer review approval before merge.
+| Standard | Measurable Bar |
+|---|---|
+| **Node.js test coverage** | Jest `--coverage` must report ≥ 80% line coverage across `src/**/*.js` (excluding `src/__tests__/`); pipeline fails below this threshold |
+| **Java test execution** | `./mvnw test` must exit 0; any failing JUnit 5 test fails the pipeline |
+| **Lint — Node.js** | ESLint must exit 0 with zero errors (warnings permitted); config sourced from existing `.eslintrc.js` |
+| **Lint — Java** | TODO: confirm whether Checkstyle or SpotBugs plugin is present in `pom.xml`; at minimum `./mvnw verify` must pass |
+| **Dependency audit — Node.js** | `npm audit --audit-level=high` must exit 0; high or critical CVEs block merge |
+| **Dependency audit — Java** | OWASP Dependency-Check or `./mvnw dependency:analyze` must run in `security-scan.yml`; critical findings block merge |
+| **PR gate** | All CI jobs must be configured as required status checks; merge to main is blocked until all pass |
+| **Workflow documentation** | Each workflow file must include inline comments explaining every job and non-obvious step |
 
 ---
 
 ## Decision Log
 
 | ID | Decision | Rationale | Status |
-|----|----------|-----------|--------|
-| ADR-001 | Use GitHub Actions as the CI platform | Task specification mandates GitHub Actions explicitly | Accepted |
-| ADR-002 | Enforce lint → test → security scan as sequential stages | Fail-fast ordering minimises wasted compute on downstream jobs | Accepted |
-| ADR-003 | Pin all third-party Actions to a specific version or SHA | Mitigates supply-chain risk; aligns with GitHub hardening guidance | Accepted |
-| ADR-004 | Defer language/runtime-specific tooling selection | Runtime and build tool are unknown per tech analysis; tooling must be confirmed before pipeline is finalised | Proposed |
-| ADR-005 | Security scanner selection is TODO | Cannot be determined without confirmed language/runtime stack | Proposed |
+|---|---|---|---|
+| ADR-001 | Split CI into two workflow files: `ci.yml` (lint + test) and `security-scan.yml` (SAST + audit) | Matches existing file structure in `.github/workflows/`; separates fast feedback from slower security scans | Accepted |
+| ADR-002 | Use `actions/setup-node@v4` with `node-version: '20'` and `actions/setup-java@v4` with `distribution: 'temurin'` | Aligns with declared runtimes; Temurin is the standard LTS distribution for GitHub Actions | Accepted |
+| ADR-003 | Cache npm dependencies (`~/.npm`) and Maven local repository (`~/.m2`) in CI | Reduces cold-start time on repeated runs; standard practice for both ecosystems | Accepted |
+| ADR-004 | Run integration tests using `docker-compose.test.yml` | File already exists; Testcontainers used by Java service requires Docker; avoids duplicating environment setup | Accepted |
+| ADR-005 | Canonical Java version is TODO | `AGENTS.md` states Java 21; `README.md` states Java 17; must be resolved by reviewing `pom.xml` `<java.version>` property before workflow is written | Proposed |
