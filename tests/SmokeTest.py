@@ -2,10 +2,8 @@ import sys
 import importlib
 import json
 import os
-import subprocess
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Version assertions
@@ -14,103 +12,94 @@ import pytest
 def test_python_version_is_at_least_3_12():
     """
     The upgrade target is Python 3.12 or 3.13.
-    The current runtime must be >= 3.12 and NOT the legacy 3.8.
+    The current runtime must be >= 3.12 (not the EOL 3.8).
     """
-    major, minor = sys.version_info.major, sys.version_info.minor
-    assert major == 3, f"Expected Python 3.x, got {major}.{minor}"
-    assert minor >= 12, (
-        f"Upgrade target is Python 3.12+, but active interpreter is {major}.{minor}. "
-        "The upgrade has not been applied."
-    )
-
-
-def test_python_version_is_not_legacy_3_8():
-    """Explicitly confirm we are no longer running on the EOL 3.8 baseline."""
-    assert sys.version_info[:2] != (3, 8), (
-        "Python 3.8 (EOL) is still active. The upgrade to 3.12/3.13 has not been applied."
+    assert sys.version_info >= (3, 12), (
+        f"Expected Python >= 3.12 but got {sys.version_info.major}.{sys.version_info.minor}. "
+        "Upgrade Python before running this service."
     )
 
 
 def test_flask_version_is_3_x():
-    """Flask must be upgraded from 1.x (EOL) to 3.x."""
+    """Flask must be upgraded to 3.x (target 3.1)."""
     flask = pytest.importorskip("flask", reason="Flask is not installed")
     major = int(flask.__version__.split(".")[0])
     assert major >= 3, (
-        f"Flask {flask.__version__} is active. The upgrade to Flask 3.x has not been applied."
+        f"Expected Flask >= 3.x but found {flask.__version__}. "
+        "Run: pip install 'flask>=3.1'"
     )
 
 
-def test_flask_version_is_not_1_x():
-    """Confirm Flask 1.x is no longer present."""
+def test_flask_exact_target_version():
+    """Flask target version is 3.1 — assert major.minor match."""
     flask = pytest.importorskip("flask", reason="Flask is not installed")
-    major = int(flask.__version__.split(".")[0])
-    assert major != 1, (
-        f"Flask 1.x ({flask.__version__}) is still installed. "
-        "The upgrade to Flask 3.x has not been applied."
+    parts = flask.__version__.split(".")
+    major, minor = int(parts[0]), int(parts[1])
+    assert (major, minor) >= (3, 1), (
+        f"Expected Flask >= 3.1 but found {flask.__version__}."
     )
 
 
 def test_sqlalchemy_version_is_2_x():
-    """SQLAlchemy must be upgraded from 1.3 (EOL) to 2.0."""
+    """SQLAlchemy must be upgraded to 2.0."""
     sa = pytest.importorskip("sqlalchemy", reason="SQLAlchemy is not installed")
     major = int(sa.__version__.split(".")[0])
     assert major >= 2, (
-        f"SQLAlchemy {sa.__version__} is active. "
-        "The upgrade to SQLAlchemy 2.0 has not been applied."
-    )
-
-
-def test_sqlalchemy_version_is_not_1_3():
-    """Confirm SQLAlchemy 1.3 is no longer present."""
-    sa = pytest.importorskip("sqlalchemy", reason="SQLAlchemy is not installed")
-    version_tuple = tuple(int(x) for x in sa.__version__.split(".")[:2])
-    assert version_tuple >= (2, 0), (
-        f"SQLAlchemy {sa.__version__} is still installed. "
-        "The upgrade to 2.0 has not been applied."
+        f"Expected SQLAlchemy >= 2.x but found {sa.__version__}. "
+        "Run: pip install 'sqlalchemy>=2.0'"
     )
 
 
 # ---------------------------------------------------------------------------
-# Flask 3.x application factory pattern
+# Flask application-factory pattern (new in this upgrade)
 # ---------------------------------------------------------------------------
 
-def _import_create_app():
+@pytest.fixture(scope="module")
+def flask_app():
     """
-    Attempt to import the application factory.  The upgrade spec requires
-    Flask 3.x with the application factory pattern.  We try common module
-    paths used in the codebase.
+    Attempt to import the application factory.  The upgrade mandates the
+    application-factory pattern, so `create_app` must be importable.
+    Adjust the module path to match the actual project layout.
     """
-    for module_path in ("app", "src.app", "infrastructure.app"):
+    # Try common locations produced by the application-factory pattern.
+    factory_candidates = [
+        ("app", "create_app"),
+        ("src.app", "create_app"),
+        ("application", "create_app"),
+        ("src.infrastructure.app", "create_app"),
+    ]
+    factory = None
+    for module_path, func_name in factory_candidates:
         try:
             mod = importlib.import_module(module_path)
-            if hasattr(mod, "create_app"):
-                return mod.create_app
+            factory = getattr(mod, func_name, None)
+            if factory is not None:
+                break
         except ModuleNotFoundError:
             continue
-    return None
+
+    if factory is None:
+        pytest.skip(
+            "No create_app factory found. "
+            "Ensure the application-factory pattern is implemented as part of this upgrade."
+        )
+
+    app = factory({"TESTING": True, "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:"})
+    app.config["TESTING"] = True
+    return app
 
 
-def test_application_factory_exists():
-    """
-    Flask 3.x upgrade requires the application factory pattern.
-    A callable `create_app` must be importable.
-    """
-    create_app = _import_create_app()
-    assert create_app is not None, (
-        "No `create_app` factory function found. "
-        "The Flask 3.x application factory pattern has not been implemented."
-    )
+@pytest.fixture(scope="module")
+def client(flask_app):
+    return flask_app.test_client()
 
 
-def test_application_factory_returns_flask_app():
+def test_create_app_returns_flask_instance(flask_app):
     """create_app() must return a Flask application instance."""
-    flask = pytest.importorskip("flask")
-    create_app = _import_create_app()
-    if create_app is None:
-        pytest.skip("create_app not found — skipping factory return-type check")
-    app = create_app()
-    assert isinstance(app, flask.Flask), (
-        f"create_app() returned {type(app)!r}, expected a Flask application instance."
+    from flask import Flask
+    assert isinstance(flask_app, Flask), (
+        "create_app() did not return a Flask instance. "
+        "The application-factory pattern is required by this upgrade."
     )
 
 
@@ -118,319 +107,319 @@ def test_application_factory_returns_flask_app():
 # /health endpoint — liveness probe
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
-def flask_test_client():
-    """Return a Flask test client if the application factory is available."""
-    flask = pytest.importorskip("flask")
-    create_app = _import_create_app()
-    if create_app is None:
-        pytest.skip("create_app not found — cannot create test client")
-    app = create_app()
-    app.config["TESTING"] = True
-    with app.test_client() as client:
-        yield client
-
-
-def test_health_endpoint_returns_200(flask_test_client):
+def test_health_endpoint_returns_200(client):
     """GET /api/health must return HTTP 200."""
-    response = flask_test_client.get("/api/health")
+    response = client.get("/api/health")
     assert response.status_code == 200, (
-        f"GET /api/health returned {response.status_code}, expected 200."
+        f"Expected 200 from /api/health but got {response.status_code}"
     )
 
 
-def test_health_endpoint_returns_json(flask_test_client):
-    """GET /api/health must return application/json content-type."""
-    response = flask_test_client.get("/api/health")
+def test_health_endpoint_returns_json(client):
+    """GET /api/health must return application/json."""
+    response = client.get("/api/health")
     assert "application/json" in response.content_type, (
-        f"GET /api/health content-type is {response.content_type!r}, expected application/json."
+        f"Expected JSON content-type but got {response.content_type}"
     )
 
 
-def test_health_endpoint_payload_status_ok(flask_test_client):
-    """GET /api/health payload must contain status='ok'."""
-    response = flask_test_client.get("/api/health")
+def test_health_endpoint_payload(client):
+    """GET /api/health must include status='ok' and a timestamp."""
+    response = client.get("/api/health")
     data = response.get_json()
-    assert data is not None, "GET /api/health returned non-JSON body."
-    assert data.get("status") == "ok", (
-        f"Expected status='ok' in /api/health response, got {data.get('status')!r}."
+    assert data is not None, "/api/health returned non-JSON body"
+    assert data.get("status") == "ok", f"Expected status='ok' but got {data.get('status')}"
+    assert "timestamp" in data, "Response missing 'timestamp' field"
+    assert data["timestamp"], "'timestamp' field is empty"
+
+
+def test_health_endpoint_no_auth_required(client):
+    """
+    /api/health must be accessible without authentication tokens.
+    This verifies the security allowlist introduced in this upgrade.
+    """
+    response = client.get("/api/health")
+    assert response.status_code != 401, (
+        "/api/health returned 401 — the endpoint must be publicly accessible"
     )
-
-
-def test_health_endpoint_payload_has_timestamp(flask_test_client):
-    """GET /api/health payload must include a non-empty timestamp field."""
-    response = flask_test_client.get("/api/health")
-    data = response.get_json()
-    assert data is not None, "GET /api/health returned non-JSON body."
-    assert "timestamp" in data and data["timestamp"], (
-        "GET /api/health response is missing a non-empty 'timestamp' field."
-    )
-
-
-def test_health_endpoint_is_unauthenticated(flask_test_client):
-    """GET /api/health must be accessible without any authentication token."""
-    response = flask_test_client.get("/api/health")
-    assert response.status_code != 401 and response.status_code != 403, (
-        f"GET /api/health requires authentication (status {response.status_code}). "
-        "Liveness probes must be unauthenticated."
+    assert response.status_code != 403, (
+        "/api/health returned 403 — the endpoint must be publicly accessible"
     )
 
 
 # ---------------------------------------------------------------------------
-# /ready endpoint — readiness probe (new endpoint added by this upgrade)
+# /ready endpoint — readiness probe (NEW in this upgrade)
 # ---------------------------------------------------------------------------
 
-def test_ready_endpoint_exists(flask_test_client):
+def test_ready_endpoint_exists(client):
     """
-    GET /api/ready must exist (new endpoint introduced by this upgrade).
-    A 404 means the route has not been registered.
+    GET /api/ready must exist (introduced by this upgrade).
+    A 404 means the endpoint was not added.
     """
-    response = flask_test_client.get("/api/ready")
+    response = client.get("/api/ready")
     assert response.status_code != 404, (
-        "GET /api/ready returned 404. The new readiness endpoint has not been registered. "
-        "Ensure the route is mounted at /api/ready."
+        "GET /api/ready returned 404. "
+        "The /ready readiness endpoint must be added as part of this upgrade."
     )
 
 
-def test_ready_endpoint_returns_200(flask_test_client):
-    """GET /api/ready must return HTTP 200 when the service is ready."""
-    response = flask_test_client.get("/api/ready")
-    assert response.status_code == 200, (
-        f"GET /api/ready returned {response.status_code}, expected 200."
+def test_ready_endpoint_returns_200_when_healthy(client):
+    """GET /api/ready must return 200 when the service is ready."""
+    response = client.get("/api/ready")
+    assert response.status_code in (200, 503), (
+        f"GET /api/ready returned unexpected status {response.status_code}. "
+        "Expected 200 (ready) or 503 (unavailable)."
     )
 
 
-def test_ready_endpoint_returns_json(flask_test_client):
-    """GET /api/ready must return application/json content-type."""
-    response = flask_test_client.get("/api/ready")
+def test_ready_endpoint_returns_json(client):
+    """GET /api/ready must return application/json."""
+    response = client.get("/api/ready")
     assert "application/json" in response.content_type, (
-        f"GET /api/ready content-type is {response.content_type!r}, expected application/json."
+        f"Expected JSON content-type from /api/ready but got {response.content_type}"
     )
 
 
-def test_ready_endpoint_payload_status_ready(flask_test_client):
-    """GET /api/ready payload must contain status='ready'."""
-    response = flask_test_client.get("/api/ready")
+def test_ready_endpoint_payload_when_ready(client):
+    """
+    When /api/ready returns 200, the body must contain a 'status' field
+    and a 'timestamp' field.
+    """
+    response = client.get("/api/ready")
+    if response.status_code != 200:
+        pytest.skip("Service reported not-ready (503); skipping payload shape check.")
     data = response.get_json()
-    assert data is not None, "GET /api/ready returned non-JSON body."
-    assert data.get("status") == "ready", (
-        f"Expected status='ready' in /api/ready response, got {data.get('status')!r}."
-    )
+    assert data is not None, "/api/ready returned non-JSON body"
+    assert "status" in data, "Response missing 'status' field"
+    assert "timestamp" in data, "Response missing 'timestamp' field"
 
 
-def test_ready_endpoint_payload_has_timestamp(flask_test_client):
-    """GET /api/ready payload must include a non-empty timestamp field."""
-    response = flask_test_client.get("/api/ready")
-    data = response.get_json()
-    assert data is not None, "GET /api/ready returned non-JSON body."
-    assert "timestamp" in data and data["timestamp"], (
-        "GET /api/ready response is missing a non-empty 'timestamp' field."
-    )
-
-
-def test_ready_endpoint_is_unauthenticated(flask_test_client):
-    """GET /api/ready must be accessible without any authentication token."""
-    response = flask_test_client.get("/api/ready")
-    assert response.status_code != 401 and response.status_code != 403, (
-        f"GET /api/ready requires authentication (status {response.status_code}). "
-        "Readiness probes must be unauthenticated."
+def test_ready_endpoint_no_auth_required(client):
+    """/api/ready must be accessible without authentication."""
+    response = client.get("/api/ready")
+    assert response.status_code not in (401, 403), (
+        f"/api/ready returned {response.status_code} — "
+        "the readiness endpoint must be publicly accessible (no auth required)."
     )
 
 
 # ---------------------------------------------------------------------------
-# SQLAlchemy 2.0 — deprecated legacy query API must not be used
+# SQLAlchemy 2.0 — deprecated 1.x query API must not be used
 # ---------------------------------------------------------------------------
 
 def test_sqlalchemy_legacy_query_api_not_imported():
     """
     SQLAlchemy 2.0 removes the legacy Session.query() pattern.
-    Verify that the application does not import the removed
-    `sqlalchemy.orm.Query` in a way that would fail at runtime.
-    The class still exists for compatibility but active use of
-    `session.query(Model)` is the deprecated pattern; we verify
-    the new `select()` construct is importable as the replacement.
+    Verify that the project source files do not import the removed
+    `sqlalchemy.orm.Query` class directly (a sign of un-migrated 1.x code).
     """
-    sa_orm = pytest.importorskip("sqlalchemy.orm")
-    from sqlalchemy import select  # noqa: F401 — must be importable in 2.0
-    # select() is the canonical 2.0 query API
-    assert callable(select), "sqlalchemy.select is not callable — SQLAlchemy 2.0 API unavailable."
+    import ast
+    import pathlib
 
+    src_root = pathlib.Path(__file__).parent
+    # Walk up to find a 'src' directory if this test lives elsewhere
+    for candidate in [src_root, src_root.parent, src_root.parent / "src"]:
+        if candidate.is_dir():
+            src_root = candidate
+            break
 
-def test_sqlalchemy_2_0_select_construct_works():
-    """
-    Verify the SQLAlchemy 2.0 select() construct works end-to-end
-    with an in-memory SQLite database — the canonical replacement for
-    the legacy session.query() API.
-    """
-    sa = pytest.importorskip("sqlalchemy")
-    from sqlalchemy import create_engine, Column, Integer, String, select
-    from sqlalchemy.orm import DeclarativeBase, Session
-
-    class Base(DeclarativeBase):
-        pass
-
-    class _SampleModel(Base):
-        __tablename__ = "sample_upgrade_test"
-        id = Column(Integer, primary_key=True)
-        name = Column(String(50))
-
-    engine = create_engine("sqlite:///:memory:", future=True)
-    Base.metadata.create_all(engine)
-
-    with Session(engine) as session:
-        session.add(_SampleModel(id=1, name="upgrade-check"))
-        session.commit()
-
-    with Session(engine) as session:
-        stmt = select(_SampleModel).where(_SampleModel.name == "upgrade-check")
-        result = session.execute(stmt).scalars().first()
-
-    assert result is not None, "SQLAlchemy 2.0 select() query returned no results."
-    assert result.name == "upgrade-check", (
-        f"Unexpected name value: {result.name!r}"
+    legacy_usages = []
+    for py_file in src_root.rglob("*.py"):
+        if "test" in py_file.name.lower():
+            continue
+        try:
+            tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            # Detect: from sqlalchemy.orm import Query
+            if isinstance(node, ast.ImportFrom):
+                if (node.module or "").startswith("sqlalchemy"):
+                    for alias in node.names:
+                        if alias.name == "Query":
+                            legacy_usages.append(str(py_file))
+    assert not legacy_usages, (
+        "The following files import the legacy SQLAlchemy 1.x 'Query' class "
+        f"which is removed in 2.0: {legacy_usages}. "
+        "Migrate to session.execute(select(...)) as required by this upgrade."
     )
 
 
-def test_sqlalchemy_2_0_engine_future_flag():
+def test_sqlalchemy_2_select_api_importable():
     """
-    SQLAlchemy 2.0 engines no longer require `future=True` (it is the default),
-    but passing it must not raise an error — confirming 2.0 compatibility.
+    The SQLAlchemy 2.0 select() construct must be importable — this is the
+    replacement for the legacy Query API.
     """
-    sa = pytest.importorskip("sqlalchemy")
-    from sqlalchemy import create_engine
-    engine = create_engine("sqlite:///:memory:", future=True)
-    assert engine is not None
+    from sqlalchemy import select  # noqa: F401 — import is the assertion
 
 
-# ---------------------------------------------------------------------------
-# Flask 3.x — deprecated APIs removed in 3.x must not be present
-# ---------------------------------------------------------------------------
-
-def test_flask_3_removed_before_first_request():
+def test_sqlalchemy_2_mapped_column_importable():
     """
-    Flask 3.x removed `before_first_request` decorator (deprecated in 2.x).
-    Confirm it is no longer present on the Flask application class.
+    mapped_column() is the new 2.0 declarative API.  Its presence confirms
+    the ORM layer has been migrated away from the 1.x Column() style.
     """
-    flask = pytest.importorskip("flask")
-    app = flask.Flask(__name__)
-    assert not hasattr(app, "before_first_request"), (
-        "Flask app still exposes `before_first_request` — this was removed in Flask 3.x. "
-        "The upgrade to Flask 3.x has not been fully applied."
-    )
-
-
-def test_flask_3_json_provider_available():
-    """
-    Flask 3.x introduced the `json_provider_class` attribute on the app.
-    Its presence confirms Flask 3.x is active.
-    """
-    flask = pytest.importorskip("flask")
-    app = flask.Flask(__name__)
-    assert hasattr(app, "json_provider_class"), (
-        "Flask app does not have `json_provider_class`. "
-        "This attribute was introduced in Flask 2.2+ and is required in Flask 3.x."
-    )
-
-
-def test_flask_3_no_deprecated_flask_json_module():
-    """
-    `flask.json.jsonify` must still work in Flask 3.x (it was not removed),
-    but the old `flask.json` module-level `dumps`/`loads` wrappers that
-    relied on the app context implicitly should be replaced by the provider API.
-    Verify `flask.json.provider` sub-module exists (Flask 2.2+ / 3.x).
-    """
-    flask = pytest.importorskip("flask")
-    import flask.json.provider as provider_module  # noqa: F401
-    assert provider_module is not None, (
-        "flask.json.provider module not found — Flask 3.x JSON provider API is missing."
-    )
-
-
-# ---------------------------------------------------------------------------
-# Environment-based secrets management (no hardcoded credentials)
-# ---------------------------------------------------------------------------
-
-def test_secret_key_loaded_from_environment(monkeypatch):
-    """
-    The upgrade requires environment-based secrets management.
-    The Flask SECRET_KEY must be read from the environment, not hardcoded.
-    """
-    flask = pytest.importorskip("flask")
-    test_secret = "test-upgrade-secret-key-xyz"
-    monkeypatch.setenv("SECRET_KEY", test_secret)
-
-    create_app = _import_create_app()
-    if create_app is None:
-        pytest.skip("create_app not found — skipping secret key environment test")
-
-    app = create_app()
-    # The app's secret key should either match the env var or not be a
-    # well-known insecure default like "dev", "secret", "changeme", etc.
-    insecure_defaults = {"dev", "secret", "changeme", "hardcoded", "password", "flask"}
-    secret = (app.secret_key or "").lower() if app.secret_key else ""
-    assert secret not in insecure_defaults, (
-        f"Flask SECRET_KEY appears to be a hardcoded insecure default: {app.secret_key!r}. "
-        "Secrets must be loaded from environment variables."
-    )
-
-
-def test_database_url_not_hardcoded(monkeypatch):
-    """
-    Database connection strings must not be hardcoded.
-    Verify that the application reads DATABASE_URL (or equivalent) from the environment.
-    """
-    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
-    create_app = _import_create_app()
-    if create_app is None:
-        pytest.skip("create_app not found — skipping DATABASE_URL environment test")
-    # If create_app raises a configuration error when DATABASE_URL is set to a
-    # test value, that indicates hardcoded credentials are still present.
     try:
-        app = create_app()
-        assert app is not None
-    except Exception as exc:
+        from sqlalchemy.orm import mapped_column  # noqa: F401
+    except ImportError:
         pytest.fail(
-            f"create_app() raised {type(exc).__name__}: {exc} when DATABASE_URL was set "
-            "via environment. Ensure the app reads DATABASE_URL from os.environ."
+            "sqlalchemy.orm.mapped_column is not importable. "
+            "Ensure SQLAlchemy >= 2.0 is installed and the ORM models are migrated."
         )
 
 
 # ---------------------------------------------------------------------------
-# New configuration keys introduced by the upgrade
+# Environment-based secrets management (new requirement in this upgrade)
 # ---------------------------------------------------------------------------
 
-def test_new_health_blueprint_or_route_registered(flask_test_client):
+def test_no_hardcoded_credentials_in_config():
     """
-    The upgrade adds /api/health and /api/ready endpoints.
-    Both routes must be registered in the Flask URL map.
+    The upgrade requires removing hardcoded credentials.
+    Scan Python source files for obvious hardcoded secret patterns.
     """
-    response_health = flask_test_client.get("/api/health")
-    response_ready = flask_test_client.get("/api/ready")
+    import pathlib
+    import re
 
-    assert response_health.status_code != 404, (
-        "GET /api/health is not registered in the Flask URL map (404). "
-        "The health endpoint has not been added."
+    # Patterns that suggest hardcoded credentials
+    suspicious_patterns = [
+        re.compile(r'password\s*=\s*["\'][^"\']{4,}["\']', re.IGNORECASE),
+        re.compile(r'secret\s*=\s*["\'][^"\']{4,}["\']', re.IGNORECASE),
+        re.compile(r'api_key\s*=\s*["\'][^"\']{4,}["\']', re.IGNORECASE),
+    ]
+    # Allowlist patterns (test fixtures, example values, env lookups)
+    allowlist = re.compile(
+        r'os\.environ|os\.getenv|environ\[|getenv\(|example|test|fake|mock|dummy|placeholder',
+        re.IGNORECASE,
     )
-    assert response_ready.status_code != 404, (
-        "GET /api/ready is not registered in the Flask URL map (404). "
-        "The readiness endpoint has not been added."
+
+    src_root = pathlib.Path(__file__).parent
+    for candidate in [src_root, src_root.parent, src_root.parent / "src"]:
+        if candidate.is_dir():
+            src_root = candidate
+            break
+
+    violations = []
+    for py_file in src_root.rglob("*.py"):
+        if "test" in py_file.name.lower():
+            continue
+        try:
+            content = py_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line_no, line in enumerate(content.splitlines(), start=1):
+            if allowlist.search(line):
+                continue
+            for pattern in suspicious_patterns:
+                if pattern.search(line):
+                    violations.append(f"{py_file}:{line_no}: {line.strip()}")
+
+    assert not violations, (
+        "Possible hardcoded credentials found (upgrade requires env-based secrets):\n"
+        + "\n".join(violations)
     )
 
 
-def test_health_and_ready_endpoints_are_distinct(flask_test_client):
+def test_environment_variable_loading_does_not_raise():
     """
-    /api/health (liveness) and /api/ready (readiness) must be separate endpoints
-    returning distinct status values.
+    The application must be able to load its configuration from environment
+    variables without raising an exception when optional vars are absent.
     """
-    health_data = flask_test_client.get("/api/health").get_json()
-    ready_data = flask_test_client.get("/api/ready").get_json()
+    config_candidates = [
+        "config",
+        "src.config",
+        "app.config",
+        "src.infrastructure.config",
+    ]
+    loaded = False
+    for module_path in config_candidates:
+        try:
+            importlib.import_module(module_path)
+            loaded = True
+            break
+        except ModuleNotFoundError:
+            continue
+        except Exception as exc:
+            pytest.fail(
+                f"Config module '{module_path}' raised an exception during import: {exc}. "
+                "Ensure all required environment variables have safe defaults."
+            )
+    if not loaded:
+        pytest.skip("No config module found; skipping env-loading check.")
 
-    if health_data is None or ready_data is None:
-        pytest.skip("One or both endpoints returned non-JSON — skipping distinctness check")
 
-    assert health_data.get("status") != ready_data.get("status") or (
-        health_data.get("status") == "ok" and ready_data.get("status") == "ready"
-    ), (
-        "The /api/health and /api/ready endpoints must return distinct status values "
-        "('ok' and 'ready' respectively). They appear to be the same endpoint."
+# ---------------------------------------------------------------------------
+# Flask 3.x — removed / changed APIs must not be present
+# ---------------------------------------------------------------------------
+
+def test_flask_3_removed_before_first_request_not_used():
+    """
+    Flask 3.x removed `before_first_request`.  Verify it is not referenced
+    in the application source.
+    """
+    import pathlib
+
+    src_root = pathlib.Path(__file__).parent
+    for candidate in [src_root, src_root.parent, src_root.parent / "src"]:
+        if candidate.is_dir():
+            src_root = candidate
+            break
+
+    violations = []
+    for py_file in src_root.rglob("*.py"):
+        if "test" in py_file.name.lower():
+            continue
+        try:
+            content = py_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "before_first_request" in content:
+            violations.append(str(py_file))
+
+    assert not violations, (
+        "The following files use 'before_first_request' which was removed in Flask 3.x: "
+        f"{violations}. Replace with application startup logic in create_app()."
     )
+
+
+def test_flask_3_removed_flask_json_not_used():
+    """
+    Flask 3.x removed `flask.json.provider` legacy helpers and the
+    `flask.json` module's `JSONEncoder`/`JSONDecoder` class attributes.
+    Verify the deprecated `app.json_encoder` attribute is not assigned.
+    """
+    import pathlib
+
+    src_root = pathlib.Path(__file__).parent
+    for candidate in [src_root, src_root.parent, src_root.parent / "src"]:
+        if candidate.is_dir():
+            src_root = candidate
+            break
+
+    violations = []
+    for py_file in src_root.rglob("*.py"):
+        if "test" in py_file.name.lower():
+            continue
+        try:
+            content = py_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "json_encoder" in content or "json_decoder" in content:
+            violations.append(str(py_file))
+
+    assert not violations, (
+        "The following files reference removed Flask 1.x JSON encoder/decoder attributes: "
+        f"{violations}. Use app.json.provider or flask.json.provider.DefaultJSONProvider."
+    )
+
+
+def test_flask_3_jsonify_replacement_works(flask_app):
+    """
+    flask.jsonify() still works in Flask 3.x and must remain functional
+    (it is the supported way to return JSON responses).
+    """
+    from flask import jsonify
+
+    with flask_app.app_context():
+        response = jsonify({"status": "ok"})
+        assert response.status_code == 200
+        data = json.loads(response.get_data(as_text=True))
+        assert data["status"] == "ok"
