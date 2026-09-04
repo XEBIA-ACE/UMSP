@@ -163,5 +163,3 @@ services:
 
   payment-service:
     build: ./payment-service
-    ports: ["8080:8080"]
-    env_file: ./payment-service/.env
