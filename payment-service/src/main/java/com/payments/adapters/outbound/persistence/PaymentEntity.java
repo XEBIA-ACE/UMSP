@@ -153,13 +153,11 @@ public class PaymentEntity {
     /** @param method the payment gateway method */
     public void setMethod(PaymentMethod method) { this.method = method; }
 
-    /** @return the gateway-assigned transaction identifier */
+    /** @return the gateway-assigned transaction id */
     public String getGatewayTransactionId() { return gatewayTransactionId; }
 
-    /** @param gatewayTransactionId the gateway-assigned transaction identifier */
-    public void setGatewayTransactionId(String gatewayTransactionId) {
-        this.gatewayTransactionId = gatewayTransactionId;
-    }
+    /** @param gatewayTransactionId the gateway-assigned transaction id */
+    public void setGatewayTransactionId(String gatewayTransactionId) { this.gatewayTransactionId = gatewayTransactionId; }
 
     /** @return the human-readable description */
     public String getDescription() { return description; }
