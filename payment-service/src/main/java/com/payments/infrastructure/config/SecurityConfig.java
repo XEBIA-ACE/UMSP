@@ -14,6 +14,7 @@ import org.springframework.security.web.SecurityFilterChain;
  * <p>Security rules applied:
  * <ul>
  *   <li>{@code /api/health/**} – publicly accessible without authentication (liveness probes).</li>
+ *   <li>{@code /api/ready/**} – publicly accessible without authentication (readiness probes).</li>
  *   <li>{@code /api/payments/**} – requires a valid JWT bearer token.</li>
  *   <li>CSRF protection is disabled because the API is stateless and consumed by
  *       non-browser clients.</li>
@@ -44,6 +45,8 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 // Health endpoint is public (no authentication required)
                 .requestMatchers("/api/health/**").permitAll()
+                // Readiness endpoint is public (no authentication required)
+                .requestMatchers("/api/ready/**").permitAll()
                 // All payment endpoints require a valid JWT
                 .requestMatchers("/api/payments/**").authenticated()
                 // Deny everything else by default

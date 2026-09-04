@@ -48,6 +48,7 @@ Both services follow **Hexagonal Architecture (Ports & Adapters)** — the domai
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/health` | Liveness probe |
+| `GET` | `/api/ready` | Readiness probe |
 | `POST` | `/api/auth/register` | Register a new user |
 | `POST` | `/api/auth/login` | Authenticate and receive JWT |
 | `POST` | `/api/auth/recover-password` | Request password reset email |
@@ -87,6 +88,7 @@ docker run -p 3000:3000 --env-file .env user-management-service
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/api/health` | None | Liveness probe |
+| `GET` | `/api/ready` | None | Readiness probe |
 | `POST` | `/api/payments` | JWT | Process a new payment |
 | `GET` | `/api/payments/{id}` | JWT | Retrieve payment by ID |
 | `POST` | `/api/payments/{id}/refund` | JWT | Refund a completed payment |
@@ -161,83 +163,3 @@ services:
 
   payment-service:
     build: ./payment-service
-    ports: ["8080:8080"]
-    env_file: ./payment-service/.env
-```
-
----
-
-## Testing
-
-### User Management (Jest)
-
-```bash
-cd user-management
-npm test
-# Coverage report written to ./coverage/
-```
-
-Tests cover:
-- `GET /api/health` — status, timestamp, content-type
-- `RegisterUser` use case — happy path, duplicate email, invalid email, short password
-- `LoginUser` use case — happy path, unknown user, wrong password, unverified account
-
-### Payment Service (JUnit 5 + Mockito)
-
-```bash
-cd payment-service
-mvn test
-```
-
-Tests cover:
-- `GET /api/health` — status 200, `status: ok`
-- `POST /api/payments` — 201 on valid request
-- `GET /api/payments/{id}` — 404 on unknown ID
-- `PaymentApplicationService` — Stripe routing, not-found exception, refund validation
-
----
-
-## Security
-
-- **User Management**: passwords hashed with bcrypt (12 rounds); JWT tokens signed with HS256; login errors are deliberately ambiguous to prevent user enumeration; password-recovery flow is enumeration-safe.
-- **Payment Service**: all `/api/payments/**` endpoints require a valid JWT (OAuth2 resource server); `/api/health` is public; CSRF disabled (stateless REST API); sessions are `STATELESS`.
-- **PCI DSS**: raw card data is never stored; all card processing is delegated to Stripe/PayPal SDKs.
-
----
-
-## Project Structure
-
-```
-.
-├── README.md
-├── user-management/                  # Node.js / Express service
-│   ├── src/
-│   │   ├── domain/                   # Entities + Port interfaces
-│   │   ├── application/              # Use cases
-│   │   ├── adapters/
-│   │   │   ├── inbound/http/         # Controllers, routes, middleware
-│   │   │   └── outbound/             # Persistence, email, auth adapters
-│   │   └── infrastructure/           # App factory, server, env config
-│   ├── Dockerfile
-│   ├── .env.example
-│   └── package.json
-└── payment-service/                  # Java / Spring Boot service
-    ├── src/
-    │   ├── main/java/com/payments/
-    │   │   ├── domain/               # Entities, enums, port interfaces
-    │   │   ├── application/          # App service + DTOs
-    │   │   ├── adapters/
-    │   │   │   ├── inbound/rest/     # REST controllers
-    │   │   │   └── outbound/         # Persistence, Stripe, PayPal, email
-    │   │   └── infrastructure/       # Spring Boot main + config
-    │   └── test/
-    ├── Dockerfile
-    ├── .env.example
-    └── pom.xml
-```
-
----
-
-## License
-
-MIT
