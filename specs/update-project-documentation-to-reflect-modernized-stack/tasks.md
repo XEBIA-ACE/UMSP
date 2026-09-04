@@ -2,37 +2,35 @@
 
 ## Prerequisites
 
-- [ ] [XS] Confirm write access to the repository and the default branch in GitHub repository settings
-- [ ] [XS] Verify local checkout is up to date (`git pull`) and no uncommitted changes exist in `README.md` or `AGENTS.md`
-- [ ] [XS] Confirm the actual runtime versions in use by inspecting `user-management/package.json` (Node.js 20, Express 4.18.2, Jest 29.7.0) and `payment-service/pom.xml` (Java 21, Spring Boot 3.x) before editing any documentation
+- [ ] [XS] Confirm write access to the repository and ability to open PRs against the default branch
+- [ ] [XS] Verify local checkout is up to date with `main` (or equivalent default branch) before beginning edits
+- [ ] [XS] Confirm Node.js 20 LTS and Java 21 LTS are the authoritative runtime versions by cross-checking `gateway/package.json` engine field (if present) and `payment-service/pom.xml` `<java.version>` property against AGENTS.md stack table
 
 ---
 
 ## Phase 1 — Preparation
 
-- [ ] [XS] Create a dedicated branch `docs/modernize-stack-readme` from `main` for all documentation changes
-- [ ] [XS] Audit the version discrepancy in `README.md` service table — the table lists `Java 17 · Spring Boot 3.2` for `payment-service` but `AGENTS.md` lists `Java 21 (LTS)` and `Spring Boot 3.x`; confirm the correct versions from `payment-service/pom.xml` before editing
-- [ ] [XS] Cross-reference `user-management/package.json` dependency versions (`express ^4.18.2`, `jsonwebtoken ^9.0.2`, `bcryptjs ^2.4.3`, `uuid ^9.0.0`, `nodemailer ^6.9.7`) against what is documented in `README.md` and `AGENTS.md` to identify all gaps
+- [ ] [XS] Create a dedicated documentation branch (e.g. `docs/modernize-stack`) from `main` to isolate all documentation changes
+- [ ] [XS] Audit the discrepancy between `README.md` payment-service stack entry (`Java 17 · Spring Boot 3.2`) and `AGENTS.md` stack table (`Java 21 LTS · Spring Boot 3.x`) to establish the single source of truth before editing either file
 
 ---
 
 ## Phase 2 — Core Upgrade
 
-- [ ] [S] Correct the `payment-service` stack entry in the `README.md` service summary table — change `Java 17 · Spring Boot 3.2` to match the confirmed version from `pom.xml` (expected: `Java 21 · Spring Boot 3.x`) in `README.md`
-- [ ] [S] Update the `README.md` **Payment Service** quick-start section to reflect the actual Maven wrapper command (`./mvnw spring-boot:run`) and confirm the Docker port mapping (`8080:8080`) matches `payment-service/src/main/java/com/payments/adapters/inbound/rest/HealthController.java` and `PaymentController.java`
-- [ ] [S] Update the `README.md` **Environment Variables** table for the Payment Service to add the `STRIPE_API_KEY` property key name used in `StripeGatewayAdapter.java` (`stripe.api.key` → env var `STRIPE_API_KEY`), `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` / `PAYPAL_MODE` as used in `PayPalGatewayAdapter.java`, and `NOTIFICATION_EMAIL_ENABLED` as used in `EmailNotificationAdapter.java` (`notification.email.enabled`)
-- [ ] [S] Update the `README.md` **Key endpoints** table for the Payment Service to ensure the refund endpoint `POST /api/payments/{id}/refund` is listed and matches the route defined in `PaymentController.java`
-- [ ] [S] Update `AGENTS.md` **Section 1 — Stack** table to reconcile `Java 21 (LTS)` and `Spring Boot 3.x` with the confirmed `pom.xml` values, and add explicit version numbers for `Express 4.18.2`, `Jest 29.7.0`, `Supertest 6.3.3`, and `PostgreSQL 15` / `Redis 7` where currently listed without patch versions
-- [ ] [M] Update `AGENTS.md` **Section 2 — Project Structure** to complete the truncated directory tree — add the missing `payment-service` subtree entries for `adapters/outbound/stripe/StripeGatewayAdapter.java`, `adapters/outbound/paypal/PayPalGatewayAdapter.java`, `adapters/outbound/notification/EmailNotificationAdapter.java`, `adapters/outbound/persistence/InMemoryPaymentRepository.java`, `adapters/outbound/persistence/PaymentEntity.java`, `application/service/PaymentApplicationService.java`, `application/dto/ProcessPaymentRequest.java`, and `domain/model/Payment.java` in `AGENTS.md`
-- [ ] [S] Add an **Architecture Notes** subsection to `README.md` documenting that `InMemoryPaymentRepository` (`payment-service/.../persistence/InMemoryPaymentRepository.java`) and `InMemoryUserRepository` (`user-management/src/adapters/outbound/persistence/InMemoryUserRepository.js`) are development/test adapters and must be replaced with database-backed adapters before production deployment
-- [ ] [S] Add a **Stub Adapters** notice to `README.md` documenting that `PayPalGatewayAdapter.java` and `EmailNotificationAdapter.java` contain TODO stub implementations and are not production-ready, referencing the TODO comments in those files
+- [ ] [S] Correct the payment-service stack entry in the services table in `README.md` from `Java 17 · Spring Boot 3.2` to `Java 21 (LTS) · Spring Boot 3.x` to match the authoritative stack declared in `AGENTS.md`
+- [ ] [S] Add the missing gateway/BFF layer row to the `README.md` services table — the current table lists `user-management` (Node.js 20 · Express 4 · port 3000) and `payment-service` but omits the Express API Gateway described in `AGENTS.md`; reconcile the service names and ports against the `AGENTS.md` project structure
+- [ ] [S] Update the `README.md` environment variables section for the payment-service to add the missing variables present in `AGENTS.md` but absent from the table: `STRIPE_API_KEY` (maps to `stripe.api.key` used in `StripeGatewayAdapter.java`), `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` / `PAYPAL_MODE` (maps to `paypal.client.id`, `paypal.client.secret`, `paypal.mode` in `PayPalGatewayAdapter.java`), and `notification.email.enabled` (used in `EmailNotificationAdapter.java`)
+- [ ] [S] Update the `README.md` Docker Compose example to reflect the three-service topology (gateway on 3000, user-service, payment-service on 8080) consistent with `AGENTS.md` section 2 project structure and the `docker-compose.yml` / `docker-compose.test.yml` files referenced there
+- [ ] [M] Reconcile `AGENTS.md` stack table and project structure section to accurately reflect the current codebase: confirm Spring Boot version (3.x), verify the `gateway/` directory naming matches the `user-payment-service/` root layout, and ensure all source paths listed (e.g. `UserReposit` truncation in the project tree) are completed and accurate
+- [ ] [S] Add a note in `README.md` under the payment-service section documenting that `InMemoryPaymentRepository` (`payment-service/src/main/java/com/payments/adapters/outbound/persistence/InMemoryPaymentRepository.java`) is the active persistence adapter and is not suitable for production, directing readers to replace it with a JPA/R2DBC adapter
+- [ ] [S] Add a note in `README.md` under the payment-service section documenting that `PayPalGatewayAdapter` (`payment-service/src/main/java/com/payments/adapters/outbound/paypal/PayPalGatewayAdapter.java`) and `EmailNotificationAdapter` (`payment-service/src/main/java/com/payments/adapters/outbound/notification/EmailNotificationAdapter.java`) contain stub implementations with TODO items, so operators know real integrations are pending
+- [ ] [XS] Verify `README.md` quick-start commands for the user-management service match the `scripts` block in `user-management/package.json` (`npm start`, `npm run dev`, `npm test`) — update any stale commands
 
 ---
 
 ## Phase 3 — Testing & Validation
 
-- [ ] [XS] Manually verify all internal cross-references in `README.md` (directory paths, env var names, endpoint paths) against the actual source files (`PaymentController.java`, `StripeGatewayAdapter.java`, `PayPalGatewayAdapter.java`, `EmailNotificationAdapter.java`, `user-management/package.json`) to confirm no broken references were introduced
-- [ ] [XS] Verify the `README.md` Docker Compose example snippet references the correct service names (`user-management`, `payment-service`) and ports (`3000`, `8080`) consistent with `docker-compose.yml`
+N/A — not applicable to this task
 
 ---
 
@@ -44,6 +42,6 @@ N/A — not applicable to this task
 
 ## Phase 5 — Documentation & Rollout
 
-- [ ] [XS] Add a `## Changelog` entry to `README.md` (or a top-level `CHANGELOG.md` if one exists) recording the documentation corrections: Java version fix, stub adapter notices, env var table corrections, and project structure completion
-- [ ] [XS] Open a pull request from `docs/modernize-stack-readme` to `main` with a description summarising each documentation correction and linking to the relevant source files as evidence for each change
-- [ ] [XS] Request review from at least one team member familiar with both the Node.js gateway and the Spring Boot payment service to validate accuracy of the updated `AGENTS.md` stack table and `README.md` environment variable tables before merging
+- [ ] [XS] Add a `## Changelog` entry (or update an existing one) in `README.md` recording the documentation corrections: Java runtime version fix, service table reconciliation, environment variable additions, and stub-adapter notices
+- [ ] [XS] Open a PR from `docs/modernize-stack` to `main` with a description summarising each documentation change and the specific discrepancy it resolves, referencing the relevant source files (e.g. `StripeGatewayAdapter.java`, `PayPalGatewayAdapter.java`, `AGENTS.md`) for reviewer traceability
+- [ ] [XS] After merge, verify the rendered `README.md` and `AGENTS.md` on GitHub display all tables, code blocks, and architecture diagrams correctly with no broken Markdown formatting
