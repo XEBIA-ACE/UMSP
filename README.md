@@ -65,6 +65,23 @@ npm run dev                   # development (nodemon)
 npm test                      # run test suite with coverage
 ```
 
+**Test suite**
+
+The test suite uses **pytest** with fixture-based database isolation. Each test receives a fresh `InMemoryUserRepository` instance via a function-scoped fixture, preventing state leakage between tests.
+
+```bash
+# Install Python test dependencies
+pip install pytest pytest-cov
+
+# Run tests
+pytest
+
+# Run tests with coverage
+pytest --cov=src --cov-report=term-missing
+```
+
+<!-- TODO: Verify that the pytest configuration (pytest.ini or pyproject.toml) is present and that the testpaths, python_files, and python_classes settings match the actual test file locations under src/__tests__/. -->
+
 **Docker**
 
 ```bash
@@ -161,83 +178,3 @@ services:
 
   payment-service:
     build: ./payment-service
-    ports: ["8080:8080"]
-    env_file: ./payment-service/.env
-```
-
----
-
-## Testing
-
-### User Management (Jest)
-
-```bash
-cd user-management
-npm test
-# Coverage report written to ./coverage/
-```
-
-Tests cover:
-- `GET /api/health` — status, timestamp, content-type
-- `RegisterUser` use case — happy path, duplicate email, invalid email, short password
-- `LoginUser` use case — happy path, unknown user, wrong password, unverified account
-
-### Payment Service (JUnit 5 + Mockito)
-
-```bash
-cd payment-service
-mvn test
-```
-
-Tests cover:
-- `GET /api/health` — status 200, `status: ok`
-- `POST /api/payments` — 201 on valid request
-- `GET /api/payments/{id}` — 404 on unknown ID
-- `PaymentApplicationService` — Stripe routing, not-found exception, refund validation
-
----
-
-## Security
-
-- **User Management**: passwords hashed with bcrypt (12 rounds); JWT tokens signed with HS256; login errors are deliberately ambiguous to prevent user enumeration; password-recovery flow is enumeration-safe.
-- **Payment Service**: all `/api/payments/**` endpoints require a valid JWT (OAuth2 resource server); `/api/health` is public; CSRF disabled (stateless REST API); sessions are `STATELESS`.
-- **PCI DSS**: raw card data is never stored; all card processing is delegated to Stripe/PayPal SDKs.
-
----
-
-## Project Structure
-
-```
-.
-├── README.md
-├── user-management/                  # Node.js / Express service
-│   ├── src/
-│   │   ├── domain/                   # Entities + Port interfaces
-│   │   ├── application/              # Use cases
-│   │   ├── adapters/
-│   │   │   ├── inbound/http/         # Controllers, routes, middleware
-│   │   │   └── outbound/             # Persistence, email, auth adapters
-│   │   └── infrastructure/           # App factory, server, env config
-│   ├── Dockerfile
-│   ├── .env.example
-│   └── package.json
-└── payment-service/                  # Java / Spring Boot service
-    ├── src/
-    │   ├── main/java/com/payments/
-    │   │   ├── domain/               # Entities, enums, port interfaces
-    │   │   ├── application/          # App service + DTOs
-    │   │   ├── adapters/
-    │   │   │   ├── inbound/rest/     # REST controllers
-    │   │   │   └── outbound/         # Persistence, Stripe, PayPal, email
-    │   │   └── infrastructure/       # Spring Boot main + config
-    │   └── test/
-    ├── Dockerfile
-    ├── .env.example
-    └── pom.xml
-```
-
----
-
-## License
-
-MIT
