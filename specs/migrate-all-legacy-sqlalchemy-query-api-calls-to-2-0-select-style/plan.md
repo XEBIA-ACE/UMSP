@@ -6,9 +6,9 @@
 
 The task is to migrate all legacy SQLAlchemy Query API calls to the SQLAlchemy 2.0 `select()` style. Based on the provided codebase context, the project is a Java/Spring Boot + Node.js monorepo. **No SQLAlchemy usage is present anywhere in the provided source code.** The persistence layer in the payment service uses an in-memory `ConcurrentHashMap` (`InMemoryPaymentRepository.java`), and the user-management service is Node.js-based with no Python ORM in sight.
 
-Because no SQLAlchemy code has been identified in the provided context, a big-bang approach is appropriate for the scope that *can* be acted upon: a targeted audit and migration of any SQLAlchemy call sites once they are located. The risk score is low-to-medium (upgrade urgency: medium per tech analysis) and the effort estimate is moderate, making a single-phase sweep preferable to a strangler-fig approach.
+Because no SQLAlchemy code has been identified in the provided context, a big-bang approach is appropriate for any files that are discovered during a full repository scan — the scope is bounded, the risk is low-to-medium (per the upgrade option), and a strangler-fig approach would add unnecessary coordination overhead for an ORM query style migration.
 
-> **Critical Note:** The tech analysis lists the language as "unknown" and no SQLAlchemy dependency appears in `package.json` (Node.js) or any Java `pom.xml` provided. All plan sections below are written against the task goal; sections that cannot be grounded in the provided context are marked **TODO**.
+> **⚠️ Critical Finding:** The tech analysis states language/runtime/build tool as "unknown" and no SQLAlchemy files were present in the provided code context. All phases below assume SQLAlchemy files exist elsewhere in the repository (not provided). A full repository scan **must** be performed as the first step before any migration work begins.
 
 ---
 
@@ -16,52 +16,101 @@ Because no SQLAlchemy code has been identified in the provided context, a big-ba
 
 | Phase | Description | Dependencies | Estimated Effort |
 |---|---|---|---|
-| 1 | **Audit** — Locate every file containing legacy `session.query(Model)`, `.filter()`, `.first()`, `.all()`, `.one()`, `.one_or_none()`, `.get()` call chains across the repository | Access to full source tree (TODO: Python service not present in provided context) | TODO (derive from moderate option once scope is confirmed) |
-| 2 | **Dependency Upgrade** — Bump SQLAlchemy to the target version and enable `SQLALCHEMY_WARN_20` / future-mode flag to surface remaining legacy calls | Phase 1 complete; target version confirmed from tech analysis | TODO |
-| 3 | **Query Migration** — Replace all legacy `Query` API call sites with `select()` + `Session.execute()` style, file by file | Phase 2 complete | TODO (moderate estimate; person-days not provided in upgrade option) |
-| 4 | **Test & Validation** — Run full test suite, confirm no regressions, remove `SQLALCHEMY_WARN_20` flag | Phase 3 complete | TODO |
+| 1 | **Discovery & Audit** — Scan the full repository for all files using SQLAlchemy Query API patterns (`session.query(...)`, `.filter()`, `.first()`, `.all()`, `.one()`, `.one_or_none()`, `.get()`, etc.). Produce an inventory of affected files, classes, and call sites. | Access to full repository source | TODO (derive from actual file count once discovered) |
+| 2 | **Dependency Version Verification** — Confirm the installed SQLAlchemy version supports 2.0-style `select()`. Enable `SQLALCHEMY_WARN_20=1` (for 1.4.x) to surface all legacy call sites via deprecation warnings. | Phase 1 complete | TODO |
+| 3 | **Core Query Migration** — Rewrite all `session.query(Model).filter(...).all()` patterns to `session.execute(select(Model).where(...)).scalars().all()`. Migrate scalar fetches, `.first()`, `.one()`, `.one_or_none()`, and `.get()` equivalents. | Phase 2 complete | TODO (moderate estimate — details not provided) |
+| 4 | **Relationship & Joined Query Migration** — Migrate any joined loads, subqueries, or relationship-traversal queries that use the legacy Query API. | Phase 3 complete | TODO |
+| 5 | **Test Suite Update & Validation** — Update any unit/integration tests that mock or assert against `session.query()` call patterns. Run full test suite with `SQLALCHEMY_WARN_20=1` to confirm zero legacy warnings. | Phase 3–4 complete | TODO |
+| 6 | **Final Cleanup & Documentation** — Remove `SQLALCHEMY_WARN_20` flag, remove any legacy compatibility shims, update internal developer documentation. | Phase 5 complete | TODO |
 
-> Effort values are marked TODO because the upgrade option states "details not provided" and no person-days figure was supplied.
+> **Note:** Effort values are marked TODO because the upgrade option details were not provided and no SQLAlchemy source files were present in the context to estimate line-count or complexity.
 
 ---
 
 ## Component Changes
 
-### Persistence / Repository Layer
+### Discovery Required
 
-**What changes:** Every call site using the legacy `Session.query()` API must be rewritten to use `select()` from `sqlalchemy` combined with `Session.execute()` or `Session.scalars()`.
+No SQLAlchemy components were identified in the provided source files. The following describes the **expected** change pattern for any Python files found during Phase 1.
 
-**Pattern mapping:**
+#### Pattern: Simple Model Fetch
 
-| Legacy (1.x Query API) | Modern (2.0 `select()` style) |
-|---|---|
-| `session.query(User).filter(User.id == id).first()` | `session.execute(select(User).where(User.id == id)).scalar_one_or_none()` |
-| `session.query(User).filter_by(email=email).one()` | `session.execute(select(User).where(User.email == email)).scalar_one()` |
-| `session.query(User).all()` | `session.execute(select(User)).scalars().all()` |
-| `session.query(User).get(pk)` | `session.get(User, pk)` *(2.0 preferred)* |
-| `session.query(User).filter(...).delete()` | `session.execute(delete(User).where(...))` |
-| `session.query(User).filter(...).update({...})` | `session.execute(update(User).where(...).values(...))` |
+**Files affected:** TODO — identify during Phase 1 audit.
 
-**Files affected:** TODO — no Python source files are present in the provided context. Once the Python service directory is identified, all files matching `*repository*.py`, `*dao*.py`, `*query*.py`, or any file importing `from sqlalchemy.orm import Session` should be audited.
+**Before (legacy Query API):**
+```python
+# session.query() style
+user = session.query(User).filter(User.id == user_id).first()
+users = session.query(User).filter(User.active == True).all()
+user = session.query(User).get(user_id)
+```
 
-**APIs modified:**
-- Remove all imports of `Query` if explicitly imported.
-- Add imports: `from sqlalchemy import select, update, delete` at each affected module.
-- `Session.execute()` returns a `CursorResult`; callers must use `.scalar_one()`, `.scalar_one_or_none()`, `.scalars().all()`, etc. — return-type handling at call sites must be verified.
+**After (2.0 `select()` style):**
+```python
+from sqlalchemy import select
 
-### Application / Service Layer
+# select() style
+user = session.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+users = session.execute(select(User).where(User.active == True)).scalars().all()
+user = session.get(User, user_id)  # session.get() is retained in 2.0
+```
 
-**What changes:** Any service class that unwraps query results (e.g., checks for `None`, iterates lists) may need minor adjustments if the return type changes from a `Query` object to a plain list or scalar. No lazy-evaluation of `Query` objects will be possible after migration.
+#### Pattern: Count Query
 
-**Files affected:** TODO — dependent on locating the Python service.
+**Before:**
+```python
+count = session.query(User).filter(User.active == True).count()
+```
 
-### Configuration
+**After:**
+```python
+from sqlalchemy import select, func
 
-**What changes:**
-- During Phase 2, add `SQLALCHEMY_WARN_20 = True` (SQLAlchemy < 2.0) or enable `future=True` on the `create_engine()` call to surface all remaining legacy patterns before cutting over.
-- After Phase 4, remove the warning flag.
+count = session.execute(select(func.count()).select_from(User).where(User.active == True)).scalar_one()
+```
 
-**Config keys affected:** `create_engine(..., future=True)` — exact file path TODO.
+#### Pattern: Joined / Relationship Query
+
+**Before:**
+```python
+results = session.query(Order).join(User).filter(User.id == user_id).all()
+```
+
+**After:**
+```python
+results = session.execute(select(Order).join(User).where(User.id == user_id)).scalars().all()
+```
+
+#### Pattern: Update / Delete
+
+**Before:**
+```python
+session.query(User).filter(User.id == user_id).update({"active": False})
+session.query(User).filter(User.id == user_id).delete()
+```
+
+**After:**
+```python
+from sqlalchemy import update, delete
+
+session.execute(update(User).where(User.id == user_id).values(active=False))
+session.execute(delete(User).where(User.id == user_id))
+```
+
+#### APIs Modified
+
+| Legacy API | 2.0 Replacement | Notes |
+|---|---|---|
+| `session.query(Model)` | `select(Model)` + `session.execute()` | Core replacement |
+| `.filter(...)` | `.where(...)` | Direct rename |
+| `.all()` | `.scalars().all()` | Unwrap `ScalarResult` |
+| `.first()` | `.scalars().first()` | Unwrap `ScalarResult` |
+| `.one()` | `.scalar_one()` | Raises if not exactly one |
+| `.one_or_none()` | `.scalar_one_or_none()` | Returns `None` if absent |
+| `.get(pk)` | `session.get(Model, pk)` | `session.get()` is 2.0-compatible |
+| `.count()` | `select(func.count()).select_from(Model)` | Explicit aggregate |
+| `.update({})` | `session.execute(update(Model).values(...))` | Bulk update |
+| `.delete()` | `session.execute(delete(Model))` | Bulk delete |
 
 ---
 
@@ -69,66 +118,55 @@ Because no SQLAlchemy code has been identified in the provided context, a big-ba
 
 | Dependency | Current Version | Target Version | Breaking Changes | Migration Notes |
 |---|---|---|---|---|
-| SQLAlchemy | TODO — not listed in provided tech analysis | TODO — not listed in provided tech analysis | `Session.query()` removed in 2.0; `Query` object no longer available; `Engine.execute()` removed; implicit autocommit removed | Enable `future=True` on engine and `SQLALCHEMY_WARN_20=True` as a transitional step; all version numbers must be confirmed from actual tech analysis once provided |
+| SQLAlchemy | TODO — not determinable from provided context | TODO — not determinable from provided context | Legacy `Query` API removed in 2.0 final; deprecated in 1.4 | Set `SQLALCHEMY_WARN_20=1` on SQLAlchemy 1.4.x to surface all call sites before upgrading. If already on 2.x, `session.query()` raises `AttributeError` unless `future=True` was set. |
 
-> **All version numbers are marked TODO** because the tech analysis explicitly states "Top upgrade targets: (none listed)" and no SQLAlchemy version appears anywhere in the provided source files or `package.json`. Do not source versions from training data.
+> **All version numbers are marked TODO** because the tech analysis explicitly states the language/runtime/build tool is unknown and no `requirements.txt`, `pyproject.toml`, `setup.cfg`, or `pom.xml` with SQLAlchemy was present in the provided context. Version numbers must be sourced from the actual project dependency manifest — not from training data.
 
 ---
 
 ## Infrastructure Changes
 
-N/A — not applicable to this task. No Docker base image changes, Kubernetes manifest changes, or CI/CD pipeline changes are required solely for a SQLAlchemy Query API migration. TODO: If the Python service runs in a Docker container, confirm the base image supports the target SQLAlchemy version's Python requirement.
+N/A — not applicable to this task. The migration is a source-code-level ORM query style change. No Docker base image changes, Kubernetes manifests, CI/CD pipeline changes, or IaC updates are required solely for this migration.
+
+> **TODO:** If a CI pipeline runs Python linting or type-checking (e.g. `mypy`, `pylint` with SQLAlchemy plugin), verify that the plugin version is compatible with the target SQLAlchemy version after migration.
 
 ---
 
 ## Rollback Strategy
 
-### Phase 1 (Audit)
-- Read-only phase; no code changes. Rollback is not required.
+| Phase | Rollback Action |
+|---|---|
+| Phase 1 (Discovery) | No code changes made; nothing to roll back. Delete the audit inventory document if desired. |
+| Phase 2 (Dependency Verification) | Remove `SQLALCHEMY_WARN_20=1` from environment/config if it was added. No code changes. |
+| Phase 3 (Core Query Migration) | Revert via `git revert` or `git checkout` on the specific files migrated. Each file should be committed individually or in small logical batches to enable targeted revert. |
+| Phase 4 (Relationship & Joined Query Migration) | Same as Phase 3 — revert the specific commits covering joined query files. |
+| Phase 5 (Test Suite Update) | Revert test file changes alongside the corresponding source file reverts from Phase 3/4. |
+| Phase 6 (Final Cleanup) | Restore any removed compatibility shims from git history. Re-add `SQLALCHEMY_WARN_20=1` if needed for re-diagnosis. |
 
-### Phase 2 (Dependency Upgrade)
-- Revert the dependency version pin in `requirements.txt` / `pyproject.toml` / `setup.cfg` (file path TODO) to the previous version.
-- Re-run `pip install -r requirements.txt` (or equivalent) in the affected service container.
-- Remove `SQLALCHEMY_WARN_20 = True` and `future=True` from engine configuration.
-- Redeploy the previous Docker image tag (TODO: confirm image registry and tag strategy).
-
-### Phase 3 (Query Migration)
-- Each file migration should be committed atomically (one commit per module/file).
-- To roll back a specific file: `git revert <commit-sha>` for that file's migration commit, or `git checkout <previous-sha> -- path/to/file.py`.
-- The `future=True` engine flag can be removed temporarily to re-enable legacy `Query` API while partial rollback is in progress.
-
-### Phase 4 (Test & Validation)
-- If regressions are found post-merge, revert the Phase 3 migration commits via `git revert` on the merge commit.
-- Re-enable `SQLALCHEMY_WARN_20 = True` to identify remaining issues before re-attempting.
+**General rollback principle:** Each phase's changes must be committed to a dedicated branch (e.g. `migration/sqlalchemy-2-phase-3`) and merged via pull request. This ensures any phase can be reverted independently without affecting other phases.
 
 ---
 
 ## Testing Strategy
 
-### Unit Tests
-- **Tool:** TODO (Python test framework not identified in provided context — likely `pytest` given SQLAlchemy usage, but not confirmed).
-- For each migrated repository method, verify return types: `scalar_one_or_none()` returns `None` vs. raises `NoResultFound` — assert the correct exception/null behaviour.
-- Mock `Session` using `unittest.mock.MagicMock` or `pytest-mock`; assert that `session.execute(select(...))` is called rather than `session.query(...)`.
-- **Coverage target:** 100% of migrated call sites must have a corresponding unit test.
+> **Note:** The test stack identified in the provided context is JUnit 5 + Mockito (Java) and Jest + Supertest (Node.js). No Python test framework is referenced. The following targets the expected Python/SQLAlchemy layer — **TODO: confirm actual test framework from repository**.
 
-### Integration Tests
-- **Tool:** TODO (confirm test DB setup — likely `pytest` + `SQLAlchemy` test fixtures against a real or in-memory DB such as SQLite or a Testcontainers PostgreSQL instance, consistent with the PostgreSQL 15 stack noted in `AGENTS.md`).
-- Run existing integration tests unchanged after migration; they must all pass without modification.
-- Add integration tests for any query that uses `update()` or `delete()` DML, as these have the most behavioural differences in 2.0 (explicit `session.commit()` required; no implicit flush).
+### Test Pyramid
 
-### Regression Tests
-- Execute the full existing test suite before and after each Phase 3 commit.
-- Diff query result sets for critical read paths (user lookup by ID, payment lookup by user) using a shadow-run if possible.
+| Layer | Tooling | Coverage Target | CI Gate |
+|---|---|---|---|
+| **Unit** | TODO (likely `pytest` + `unittest.mock` for session mocking) | ≥ 80% line coverage on all migrated repository/query files | Fail build if coverage drops below baseline |
+| **Integration** | TODO (likely `pytest` + real DB or `testcontainers-python`) | All repository methods exercised against a real database dialect | Fail build on any integration test failure |
+| **Regression** | Full existing test suite re-run post-migration with `SQLALCHEMY_WARN_20=1` (if on 1.4.x) | Zero SQLAlchemy legacy deprecation warnings emitted | Fail build if any `LegacyAPIWarning` is detected |
+| **Performance** | TODO — baseline query performance before migration, compare after | No regression > 5% on p95 query latency | Advisory gate (non-blocking initially) |
 
-### Performance Tests
-- TODO — no performance test tooling is identified in the provided context for a Python service.
-- Baseline query latency for high-frequency paths (e.g., `findById`, `findByUserId` equivalents) before Phase 3; re-measure after Phase 4.
+### Specific Validation Steps
 
-### CI Gates
-- The existing GitHub Actions pipeline (`.github/workflows/ci.yml`) must be extended to:
-  1. Run `grep -r "session\.query(" --include="*.py"` and fail the build if any matches are found post-migration (zero-tolerance lint gate).
-  2. Run the full test suite with `SQLALCHEMY_WARN_20=True` during Phase 2 and assert zero warnings.
-  3. Enforce the coverage target on migrated modules.
+1. **Before migration:** Run `grep -rn "session\.query\(" --include="*.py" .` to establish a complete baseline count of legacy call sites.
+2. **After each phase:** Re-run the grep; count must decrease monotonically toward zero.
+3. **Final validation:** Zero matches for `session\.query\(` across the entire codebase.
+4. **Warning sweep:** Run the test suite with `SQLALCHEMY_WARN_20=1` (SQLAlchemy 1.4) or observe `RemovedIn20Warning`; zero warnings must be emitted.
+5. **TODO:** Confirm CI pipeline file (`.github/workflows/ci.yml` is present per AGENTS.md) includes a Python test step and add the warning-as-error flag: `python -W error::sqlalchemy.exc.RemovedIn20Warning -m pytest`.
 
 ---
 
@@ -136,9 +174,11 @@ N/A — not applicable to this task. No Docker base image changes, Kubernetes ma
 
 | Milestone | Phase | Estimated Completion | Owner |
 |---|---|---|---|
-| Full audit of SQLAlchemy call sites complete; count of legacy `session.query()` usages documented | Phase 1 | TODO | TODO |
-| SQLAlchemy dependency bumped; `future=True` enabled; zero new legacy calls introduced | Phase 2 | TODO | TODO |
-| All legacy `Query` API call sites replaced with `select()` style | Phase 3 | TODO | TODO |
-| Full test suite green; `SQLALCHEMY_WARN_20` flag removed; migration merged to main | Phase 4 | TODO | TODO |
+| Repository audit complete; all SQLAlchemy call sites inventoried | Phase 1 | TODO | TODO |
+| Dependency versions confirmed; deprecation warnings enabled | Phase 2 | TODO | TODO |
+| All simple `session.query()` fetch patterns migrated | Phase 3 | TODO | TODO |
+| All joined/relationship queries migrated | Phase 4 | TODO | TODO |
+| Test suite updated; zero legacy warnings in CI | Phase 5 | TODO | TODO |
+| Cleanup complete; migration merged to main | Phase 6 | TODO | TODO |
 
-> All timeline estimates are marked TODO because the upgrade option's person-days figure was not provided ("details not provided") and the scope of SQLAlchemy call sites cannot be determined from the provided source context.
+> **All timeline estimates are marked TODO.** The upgrade option effort estimate was stated as "details not provided" and no SQLAlchemy source files were present in the context to derive a line-count-based estimate. Timelines must be set after Phase 1 discovery establishes the actual scope of affected files and call sites.
