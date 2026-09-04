@@ -1,151 +1,184 @@
-# PLAN: Configure GitHub Actions CI Pipeline
+# Plan: Configure GitHub Actions CI Pipeline (Lint, Test, Security Scan)
 
 ## Overview
 
-**Migration Strategy: Big-Bang (Greenfield CI Configuration)**
+**Migration strategy: Big-bang (single-PR delivery)**
 
-This task introduces a net-new GitHub Actions CI pipeline configuration. Since no existing CI/CD pipeline is referenced in the provided context, this is a greenfield setup rather than a migration. A big-bang approach is appropriate: a single pull request introduces the complete pipeline configuration (lint, test, security scan) in one atomic change.
-
-**Justification:**
-- Risk score is low — adding CI configuration does not modify application code or runtime behavior.
-- Effort is bounded and self-contained (workflow YAML files only).
-- No strangler-fig or parallel-run strategy is warranted because there is no incumbent pipeline to displace.
-- Upgrade urgency is **medium**; the pipeline can be validated on a feature branch before merging to the default branch.
-
-> **NOTE:** Language, runtime, and build tool are listed as `unknown` in the tech analysis. Sections below mark tool-specific choices as `TODO` pending codebase identification. These must be resolved before implementation begins.
+The task is greenfield CI configuration — no existing `.github/workflows/` files are in production, so there is no live pipeline to migrate away from. The risk is low: a misconfigured workflow file fails silently in CI without affecting running services. The effort estimate is small (moderate option, ~3–5 person-days total across both services), making a single coordinated delivery the most practical approach. Both workflow files (`ci.yml` and `security-scan.yml`) are introduced together so that every subsequent pull request is immediately covered.
 
 ---
 
 ## Phases
 
 | Phase | Description | Dependencies | Estimated Effort |
-|-------|-------------|--------------|-----------------|
-| 1 | Identify language, runtime, and build tool; confirm repository structure | Access to repository source tree | 0.5 person-days |
-| 2 | Author core workflow file: trigger config, job matrix, checkout, dependency install, lint step | Phase 1 complete | 0.5 person-days |
-| 3 | Add test execution step with coverage reporting and CI gate | Phase 2 complete; test suite exists in repo | 0.5 person-days |
-| 4 | Add security scan step (dependency audit + SAST) | Phase 2 complete; secrets/tokens configured in repo settings | 0.5 person-days |
-| 5 | Validate pipeline end-to-end on feature branch; fix failures; open PR to default branch | Phases 2–4 complete | 0.5 person-days |
-
-**Total estimated effort: ~2.5 person-days** (derived from `moderate` option baseline; adjust if runtime is confirmed to require additional toolchain setup).
+|---|---|---|---|
+| 1 | Author `.github/workflows/ci.yml` — lint + test jobs for both `user-management` (Node.js) and `payment-service` (Java/Maven) | None | 1 person-day |
+| 2 | Author `.github/workflows/security-scan.yml` — dependency audit (npm audit, OWASP Dependency-Check) and SAST (CodeQL) | Phase 1 workflow structure as reference | 1 person-day |
+| 3 | Validate pipelines on a feature branch: fix job failures, tune coverage gates, confirm security scan thresholds | Phases 1 & 2 merged to feature branch | 0.5 person-days |
+| 4 | Merge to main, set branch-protection rules requiring CI to pass | Phase 3 green | 0.5 person-days |
 
 ---
 
 ## Component Changes
 
-### `.github/workflows/ci.yml` *(new file)*
+### `.github/workflows/ci.yml` (new file)
 
-This is the primary deliverable. Structural elements:
+**Structure:** Two parallel jobs — `lint-and-test-gateway` (Node.js) and `lint-and-test-payment` (Java).
 
-- **Trigger block:** `on: [push, pull_request]` targeting the default branch and all feature branches.
-- **`lint` job:** Runs the project linter. Tool is `TODO` — candidates include ESLint (JS/TS), Flake8/Ruff (Python), golangci-lint (Go), Checkstyle (Java), etc.
-- **`test` job:** Runs the project test suite with coverage output. Tool is `TODO`. Uploads coverage artifact or posts to a coverage service.
-- **`security` job:** Runs dependency vulnerability audit and/or SAST scan. Tool is `TODO` — candidates include `npm audit`, `pip-audit`, `trivy`, `semgrep`, `snyk`, or GitHub's native `codeql-analysis`.
-- **Job dependencies:** `test` and `security` jobs depend on `lint` passing (`needs: lint`) to fail fast.
-- **Permissions block:** Minimal permissions (`contents: read`; `security-events: write` if CodeQL is used).
+**`lint-and-test-gateway` job**
+- Checks out repo, sets up Node.js 20.
+- Working directory: `user-management/`.
+- Runs `npm ci` using `user-management/package-lock.json`.
+- Lint step: `npx eslint .` — config sourced from `gateway/.eslintrc.js` (referenced in AGENTS.md; apply same config pattern to `user-management/` if an `.eslintrc.js` is present, otherwise create one).
+- Format check: `npx prettier --check .` — config from `gateway/.prettierrc`.
+- Test step: `npm test` — invokes `jest --coverage` as defined in `user-management/package.json` `scripts.test`.
+- Coverage enforcement: Jest `--coverageThreshold` flag or `jest.config.js` entry; target ≥ 80 % lines (derived from existing `collectCoverageFrom` config in `user-management/package.json`).
+- Uploads `user-management/coverage/` as a workflow artifact.
 
-### `.github/workflows/codeql.yml` *(new file — conditional)*
+**`lint-and-test-payment` job**
+- Checks out repo, sets up Java 21 (matches AGENTS.md runtime; README states Java 17 — use 21 per AGENTS.md as authoritative).
+- Working directory: `payment-service/`.
+- Caches `~/.m2/repository` keyed on `payment-service/pom.xml` hash.
+- Build + test step: `./mvnw verify` — runs `JUnit 5` tests including `HealthControllerTest`, `PaymentControllerTest`, and `PaymentApplicationServiceTest`.
+- Surefire report uploaded as artifact.
+- No separate lint step for Java at this stage (TODO: add Checkstyle or SpotBugs plugin to `pom.xml` if required).
 
-If GitHub CodeQL is selected for SAST, a separate workflow file following GitHub's standard CodeQL template is required. Mark as `TODO` until language is confirmed (CodeQL supports C/C++, C#, Go, Java, JavaScript/TypeScript, Python, Ruby, Swift).
+**Trigger:** `push` and `pull_request` on all branches.
 
-### Repository Secrets / Variables *(configuration, not files)*
+---
 
-- `TODO` — If a third-party scanner (e.g., Snyk) is used, a secret (e.g., `SNYK_TOKEN`) must be added under **Settings → Secrets and variables → Actions**.
-- No application secrets should be introduced by this task.
+### `.github/workflows/security-scan.yml` (new file)
+
+**Structure:** Two jobs — `dependency-audit` and `sast`.
+
+**`dependency-audit` job**
+- Node.js audit: `npm audit --audit-level=high` in `user-management/`.
+- Java audit: OWASP Dependency-Check Maven plugin (`./mvnw dependency-check:check`) in `payment-service/`. Fails build on CVSS ≥ 7 (TODO: confirm threshold with security team).
+- Uploads Dependency-Check HTML report as artifact.
+
+**`sast` job**
+- Uses `github/codeql-action` with languages `javascript` (covers `user-management/`) and `java` (covers `payment-service/`).
+- Auto-build mode for Java; no custom build command needed for CodeQL given Maven wrapper is present.
+
+**Trigger:** `push` to `main`, `pull_request` targeting `main`, and `schedule` (weekly, e.g. `cron: '0 3 * * 1'`).
+
+---
+
+### `user-management/package.json` (existing file — minor addition)
+
+Add a dedicated `lint` script so CI can call it explicitly:
+
+```json
+"scripts": {
+  "lint": "eslint src/",
+  "lint:format": "prettier --check src/",
+  ...
+}
+```
+
+No version changes required.
+
+---
+
+### `payment-service/pom.xml` (existing file — TODO)
+
+If Checkstyle or SpotBugs linting is desired for Java, add the relevant Maven plugin. Not strictly required for the initial pipeline but noted as a follow-up. Mark as TODO until `pom.xml` content is available in context.
 
 ---
 
 ## Dependency Upgrade Plan
 
-| Dependency | Current Version | Target Version | Breaking Changes | Migration Notes |
-|------------|----------------|----------------|-----------------|-----------------|
-| `actions/checkout` | TODO | `v4` | None expected | Standard checkout action; pin to `v4` for Node 20 runner compatibility |
-| `actions/setup-*` (language-specific) | TODO | TODO | TODO | Select the appropriate `actions/setup-node`, `actions/setup-python`, `actions/setup-go`, etc. once language is confirmed |
-| `actions/upload-artifact` | TODO | `v4` | v3→v4 has changed input names | Use `v4`; review artifact retention defaults |
-| Security scanner action | TODO | TODO | TODO | Confirm tool selection in Phase 1 |
+No runtime dependency upgrades are required by this task. The CI pipeline consumes existing tooling already declared in the project.
 
-> **All version numbers above are based on current GitHub Actions marketplace stable releases. Exact pinned SHAs should be recorded in the workflow file for supply-chain security (see Testing Strategy).**
+| Dependency | Current Version | Target Version | Breaking Changes | Migration Notes |
+|---|---|---|---|---|
+| `jest` (devDependency) | `^29.7.0` | `^29.7.0` | None | Already at target; no change needed |
+| `eslint` | Not pinned in `user-management/package.json` | Install as devDependency if absent | N/A | Add `"eslint": "^8.x"` to `user-management/package.json` devDependencies if not present; config pattern mirrors `gateway/.eslintrc.js` |
+| `prettier` | Not pinned in `user-management/package.json` | Install as devDependency if absent | N/A | Add `"prettier": "^3.x"` if not present; config mirrors `gateway/.prettierrc` |
+| GitHub Actions `actions/checkout` | N/A (new) | `v4` | N/A | Use `actions/checkout@v4` |
+| GitHub Actions `actions/setup-node` | N/A (new) | `v4` | N/A | Use `actions/setup-node@v4` with `node-version: '20'` |
+| GitHub Actions `actions/setup-java` | N/A (new) | `v4` | N/A | Use `actions/setup-java@v4` with `distribution: 'temurin'`, `java-version: '21'` |
+| GitHub Actions `github/codeql-action` | N/A (new) | `v3` | N/A | Use `github/codeql-action/init@v3`, `autobuild@v3`, `analyze@v3` |
+
+> All version numbers above are derived from the tech analysis context (Node.js 20 LTS, Java 21 LTS per AGENTS.md). GitHub Actions action versions are the current stable releases — TODO: confirm with platform team if an internal mirror or pinned SHA policy is required.
 
 ---
 
 ## Infrastructure Changes
 
-### GitHub Actions Runner
+**GitHub Actions runners:** Both workflows use `ubuntu-latest`. No self-hosted runners are referenced in context — TODO: confirm whether the organisation mandates self-hosted runners.
 
-- **Runner OS:** `ubuntu-latest` as default. If the project requires Windows or macOS builds, add a matrix entry — `TODO` pending runtime confirmation.
-- **Runner type:** GitHub-hosted (assumed). Self-hosted runners are `TODO` — not mentioned in context.
+**Docker:** The existing `gateway/Dockerfile` and `payment-service/Dockerfile` are not invoked by the CI lint/test jobs (tests run directly via `npm test` / `./mvnw verify`). Docker Compose (`docker-compose.test.yml`) is referenced in AGENTS.md for containerised DB/Redis integration tests via Testcontainers — the Java job may need Docker-in-Docker or the `ubuntu-latest` runner's built-in Docker daemon. Add `services:` block or `docker compose -f docker-compose.test.yml up -d` step if Testcontainers tests require live PostgreSQL/Redis. TODO: verify whether `PaymentControllerTest` and `PaymentApplicationServiceTest` use Testcontainers or in-memory stubs (current code shows `InMemoryPaymentRepository`, so no external DB is needed for the existing test suite).
 
-### Repository Settings
+**Branch protection:** After Phase 4, configure the `main` branch rule in GitHub repository settings to require `lint-and-test-gateway` and `lint-and-test-payment` status checks to pass before merge. TODO: confirm branch-protection configuration is managed via Terraform/IaC or manually.
 
-- **Branch protection rule** on the default branch: require the `lint`, `test`, and `security` status checks to pass before merge. Must be configured manually in **Settings → Branches** after the workflow is merged.
-- **Actions permissions:** Ensure Actions are enabled for the repository (**Settings → Actions → General**).
+**Secrets:** The following repository secrets must be created in GitHub (Settings → Secrets → Actions) before the security-scan workflow runs end-to-end:
 
-### Docker / Kubernetes / IaC
+| Secret Name | Used By | Notes |
+|---|---|---|
+| `STRIPE_API_KEY` | `payment-service` integration tests (if any hit real Stripe) | Use `sk_test_…` value; not needed if all tests are mocked |
+| `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | Same caveat | TODO: confirm test isolation |
+| `JWT_SECRET` | `user-management` tests | Required if `JwtAuthAdapter` is exercised in integration tests |
 
-N/A — not applicable to this task. The CI pipeline runs on GitHub-hosted runners; no container image builds, Kubernetes manifests, or IaC changes are required by this task.
+Current unit tests (`loginUser.test.js`, `registerUser.test.js`) use mocks and do not require live secrets. `health.test.js` uses `createApp()` with no external calls. Secrets are therefore TODO — add only if integration tests are expanded.
 
 ---
 
 ## Rollback Strategy
 
-Each phase produces only additive file changes (new YAML files). Rollback is straightforward at every phase:
+Each phase produces only additive file changes (new YAML files, minor `package.json` script additions). Rollback is straightforward:
 
 | Phase | Rollback Action |
-|-------|----------------|
-| 1 | No files created; nothing to roll back. |
-| 2 | Delete or revert `.github/workflows/ci.yml` on the feature branch. The default branch is unaffected until the PR merges. |
-| 3 | Remove or comment out the `test` job block in `ci.yml`. The lint job continues to run independently. |
-| 4 | Remove or comment out the `security` job block in `ci.yml`. Lint and test jobs are unaffected. |
-| 5 | If the PR has merged and the pipeline causes unacceptable noise, revert the merge commit (`git revert <sha>`) or disable the workflow via **Actions → ci.yml → ⋯ → Disable workflow** in the GitHub UI without deleting the file. |
+|---|---|
+| Phase 1 — `ci.yml` created | Delete or revert `.github/workflows/ci.yml` via a follow-up commit or PR. Pipeline stops running immediately on next push. |
+| Phase 2 — `security-scan.yml` created | Delete or revert `.github/workflows/security-scan.yml`. Scheduled scans cease. |
+| Phase 3 — Threshold tuning | Revert coverage threshold changes in `jest.config.js` or `package.json`; revert CVSS threshold in `pom.xml` plugin config. Each is an independent commit. |
+| Phase 4 — Branch protection enabled | Disable the required status checks in GitHub repository Settings → Branches → Branch protection rules. This is independently reversible without touching code. |
 
-**Branch protection rollback:** If status checks were added to branch protection rules, remove them under **Settings → Branches → Edit rule** before disabling the workflow to avoid blocking all PRs.
+No database migrations, no runtime changes, and no infrastructure provisioning are involved — all rollbacks are single-commit reverts or UI toggles.
 
 ---
 
 ## Testing Strategy
 
-The CI pipeline is itself the testing infrastructure for the application. The pipeline's own correctness is validated as follows:
+The CI pipeline itself is validated by running it; the strategy below covers both the pipeline's own correctness and the test suites it executes.
 
-### Pipeline Validation (pre-merge)
+### Unit tests (fastest feedback)
+- **Node.js:** Jest, already configured in `user-management/package.json`. Tests in `src/__tests__/` — `loginUser.test.js`, `registerUser.test.js`. Run with `npm test`. Coverage target: **≥ 80 % lines** enforced via Jest `coverageThreshold`.
+- **Java:** JUnit 5 + Mockito, `PaymentApplicationServiceTest` (no Spring context, pure unit). Run via `./mvnw test`. Coverage target: **≥ 80 % line coverage** enforced via JaCoCo Maven plugin (add to `pom.xml` if not present — TODO: confirm existing `pom.xml` configuration).
 
-| Layer | Method | Tool | Gate |
-|-------|--------|------|------|
-| Syntax validation | Lint the workflow YAML before pushing | `actionlint` (static linter for GitHub Actions workflows) | Must pass with zero errors locally before PR |
-| Dry-run | Push to a non-protected feature branch and observe all three jobs execute | GitHub Actions UI | All jobs green |
-| Security — action pinning | Verify all `uses:` references are pinned to a commit SHA or immutable tag | Manual review / `zizmor` or `step-security/harden-runner` | PR checklist item |
-| Secret scanning | Confirm no secrets are hardcoded in workflow YAML | GitHub secret scanning (enabled by default on public repos) | Automated |
+### Integration tests
+- **Node.js:** Supertest, `health.test.js` — exercises `createApp()` end-to-end in-process. Included in `npm test` run.
+- **Java:** `HealthControllerTest`, `PaymentControllerTest` — `@SpringBootTest` with `MockMvc`. Run via `./mvnw verify`. No external services required given `InMemoryPaymentRepository` and mocked use-case ports.
 
-### Application Test Coverage Gate (within the `test` job)
+### Regression gate (CI gate)
+- Both `ci.yml` jobs must pass (exit 0) for a PR to be mergeable once branch protection is enabled (Phase 4).
+- `security-scan.yml` `dependency-audit` job: `npm audit --audit-level=high` must exit 0; OWASP check must find no CVSS ≥ 7 vulnerabilities.
 
-- **Target coverage:** `TODO` — establish a baseline from the first passing run; enforce a minimum threshold (recommend ≥ 80% line coverage as a starting point) once the baseline is known.
-- **Coverage tool:** `TODO` — depends on language (e.g., `pytest-cov`, `jest --coverage`, `go test -cover`).
-- **Artifact:** Upload coverage report as a workflow artifact (`actions/upload-artifact@v4`) for every run.
+### Performance tests
+N/A — not applicable to this task. No load or performance testing is introduced by the CI pipeline configuration.
 
-### Security Scan Gate (within the `security` job)
+### CI gates summary
 
-- Fail the job on **high** or **critical** severity findings.
-- **Warn** (do not fail) on **medium** findings initially; tighten after baseline is established.
-- `TODO` — configure severity thresholds in the scanner's config file once tool is selected.
-
-### CI Gates Summary
-
-| Check | Blocks PR Merge? |
-|-------|-----------------|
-| Lint passes | Yes (branch protection) |
-| All tests pass | Yes (branch protection) |
-| Coverage threshold met | Yes (once baseline set) |
-| No critical/high security findings | Yes (branch protection) |
+| Gate | Tool | Threshold | Blocks merge? |
+|---|---|---|---|
+| Node.js lint | ESLint | Zero errors | Yes (Phase 4) |
+| Node.js format | Prettier | Zero diffs | Yes (Phase 4) |
+| Node.js unit + integration | Jest | ≥ 80 % line coverage | Yes (Phase 4) |
+| Java build + test | Maven / JUnit 5 | All tests green | Yes (Phase 4) |
+| Node.js dependency audit | `npm audit` | No high/critical CVEs | Yes (Phase 4) |
+| Java dependency audit | OWASP Dependency-Check | CVSS < 7 | Yes (Phase 4) |
+| SAST | CodeQL | No critical alerts | TODO: confirm policy |
 
 ---
 
 ## Timeline
 
 | Milestone | Phase | Estimated Completion | Owner |
-|-----------|-------|---------------------|-------|
-| Language/runtime/build tool confirmed | 1 | Day 1 | TODO |
-| Core workflow file authored and pushed to feature branch | 2 | Day 1 | TODO |
-| Test step integrated with coverage reporting | 3 | Day 2 | TODO |
-| Security scan step integrated and thresholds configured | 4 | Day 2 | TODO |
-| Pipeline validated end-to-end; PR opened for review | 5 | Day 3 | TODO |
-| PR merged; branch protection rules updated | 5 | Day 3 | TODO |
+|---|---|---|---|
+| `ci.yml` authored and pushed to feature branch | Phase 1 | Day 1 | TODO |
+| `security-scan.yml` authored and pushed to feature branch | Phase 2 | Day 2 | TODO |
+| Both workflows green on feature branch; coverage thresholds confirmed | Phase 3 | Day 2 (afternoon) | TODO |
+| PR merged to `main`; branch-protection rules enabled | Phase 4 | Day 3 | TODO |
 
-> Timelines are derived from the `moderate` option estimate of ~2.5 person-days. Elapsed calendar days assume a single engineer working on this task without blockers. Adjust if Phase 1 discovery reveals significant toolchain complexity.
+Total estimated effort: **3 person-days** (within the moderate option range of 3–5 person-days, with the lower bound reflecting that no runtime code changes are required).
